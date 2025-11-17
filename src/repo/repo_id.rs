@@ -26,7 +26,7 @@ impl RepoId {
 
     pub fn parse_from_str(repo_id: &str) -> Result<Self> {
         if !repo_id.starts_with(REPO_KEY_PREFIX) {
-            return Err(anyhow!("invalid NodeId prefix"));
+            return Err(anyhow!("invalid RepoId prefix"));
         }
 
         let encoded = &repo_id[REPO_KEY_PREFIX.len()..];
