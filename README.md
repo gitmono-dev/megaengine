@@ -206,7 +206,7 @@ did:repo:zW1iF5iwCChifAcjZUrDbwD9o8LS76kFsz6bTZFEJhEqVCU
   - `NodeAnnouncement`: Advertises node metadata (alias, addresses, type)
   - `RepoAnnouncement`: Lists repositories owned by a node
 
-- **TTL (Time-to-Live)**: Default 4 hops, decremented on each relay
+- **TTL (Time-to-Live)**: Default 16 hops, decremented on each relay
 - **Deduplication**: Tracks seen message hashes in a 5-minute sliding window
 - **Broadcast Interval**: 10 seconds
 
