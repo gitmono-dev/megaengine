@@ -1,3 +1,4 @@
+pub mod git;
 pub mod gossip;
 pub mod identity;
 pub mod node;

@@ -5,7 +5,9 @@ use crate::transport::quic::ConnectionManager;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
+use tokio::sync::Mutex;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum NodeType {
@@ -21,14 +23,14 @@ pub struct NodeInfo {
     pub addresses: Vec<SocketAddr>,
     pub node_type: NodeType,
     pub version: u8,
-    pub keypair: KeyPair,
 }
 
 /// 运行时节点对象，包含网络管理器
 #[derive(Clone)]
 pub struct Node {
     pub info: NodeInfo,
-    pub connection_manager: Option<std::sync::Arc<tokio::sync::Mutex<ConnectionManager>>>,
+    pub connection_manager: Option<Arc<Mutex<ConnectionManager>>>,
+    pub keypair: KeyPair,
 }
 
 impl std::fmt::Debug for Node {
@@ -54,11 +56,11 @@ impl Node {
             addresses,
             node_type,
             version: 1,
-            keypair,
         };
         Self {
             info,
             connection_manager: None,
+            keypair,
         }
     }
 
@@ -73,10 +75,7 @@ impl Node {
     }
 
     pub fn sign_message(&self, msg: &[u8]) -> Result<Vec<u8>> {
-        self.info
-            .keypair
-            .sign(msg)
-            .map(|sig| sig.to_bytes().to_vec())
+        self.keypair.sign(msg).map(|sig| sig.to_bytes().to_vec())
     }
 
     /// 启动 QUIC 服务端
@@ -108,7 +107,7 @@ impl Node {
     }
 
     pub fn keypair(&self) -> &KeyPair {
-        &self.info.keypair
+        &self.keypair
     }
 }
 

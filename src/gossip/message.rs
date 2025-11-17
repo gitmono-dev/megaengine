@@ -1,7 +1,7 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{net::SocketAddr, time};
+use std::net::SocketAddr;
 
 use crate::{
     node::{
@@ -56,7 +56,7 @@ pub struct RepoAnnouncement {
 pub struct SignedMessage {
     pub node_id: NodeId,
     pub message: GossipMessage,
-    pub timestamp: u64,
+    pub timestamp: i64,
     pub signature: String,
 }
 
@@ -80,7 +80,7 @@ impl SignedMessage {
     pub fn new_repo_sign_message(repos: Vec<RepoId>, node: Node) -> Result<Self> {
         let message = GossipMessage::RepoAnnouncement(RepoAnnouncement {
             node_id: node.node_id().clone(),
-            repos: repos,
+            repos,
         });
 
         let mut sign_message = SignedMessage {
@@ -105,7 +105,7 @@ impl SignedMessage {
     }
 
     /// 获取消息的时间戳
-    pub fn timestamp(&self) -> u64 {
+    pub fn timestamp(&self) -> i64 {
         self.timestamp
     }
 

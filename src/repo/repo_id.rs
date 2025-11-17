@@ -24,7 +24,7 @@ impl RepoId {
         )))
     }
 
-    pub fn from_str(repo_id: &str) -> Result<Self> {
+    pub fn parse_from_str(repo_id: &str) -> Result<Self> {
         if !repo_id.starts_with(REPO_KEY_PREFIX) {
             return Err(anyhow!("invalid NodeId prefix"));
         }
@@ -57,7 +57,7 @@ impl FromStr for RepoId {
     type Err = ParseNodeIdError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        RepoId::from_str(s).map_err(|_| ParseNodeIdError)
+        RepoId::parse_from_str(s).map_err(|_| ParseNodeIdError)
     }
 }
 
@@ -98,7 +98,7 @@ mod tests {
         let repo_id = RepoId::generate(root_commit, keypair.verifying_key.as_bytes())?;
 
         // 从生成的字符串解析回 RepoId
-        let parsed_repo_id = RepoId::from_str(&repo_id.0)?;
+        let parsed_repo_id = RepoId::parse_from_str(&repo_id.0)?;
 
         // 验证解析出来的 RepoId 与原始 RepoId 是否相同
         assert_eq!(repo_id, parsed_repo_id);
@@ -110,23 +110,21 @@ mod tests {
     #[test]
     fn test_from_string_invalid_prefix() {
         let invalid_repo_id = "invalid:repo_id";
-        let result = RepoId::from_str(invalid_repo_id);
+        let result = RepoId::parse_from_str(invalid_repo_id);
         assert!(result.is_err());
     }
 
-    // 测试 RepoId 解析的错误情况：空的编码部分
     #[test]
     fn test_from_string_empty_encoded_part() {
         let invalid_repo_id = "did:repo:";
-        let result = RepoId::from_str(invalid_repo_id);
+        let result = RepoId::parse_from_str(invalid_repo_id);
         assert!(result.is_err());
     }
 
-    // 测试 RepoId 解析的错误情况：无效的 Base58 格式
     #[test]
     fn test_from_string_invalid_base_format() {
-        let invalid_repo_id = "did:repo:xyz123"; // 假设这是一个错误的 Base 格式
-        let result = RepoId::from_str(invalid_repo_id);
+        let invalid_repo_id = "did:repo:xyz123";
+        let result = RepoId::parse_from_str(invalid_repo_id);
         assert!(result.is_err());
     }
 

@@ -1,11 +1,7 @@
-use crate::node::node::Node;
 use crate::node::node_id::NodeId;
 use crate::transport::config::QuicConfig;
 use anyhow::{Context, Result};
-use quinn::{
-    Connection, ConnectionError, Endpoint, Incoming, RecvStream, ServerConfig, TransportConfig,
-    VarInt,
-};
+use quinn::{Connection, Endpoint, Incoming};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -13,14 +9,21 @@ use tokio::sync::mpsc::Receiver;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{error, info};
 
+use tokio::sync::mpsc::Sender as TokioSender;
+
 const READ_BUF_SIZE: usize = 1024 * 1024;
+
+// Type alias for incoming message sender to reduce type complexity
+type IncomingMessageSender = Arc<Mutex<Option<TokioSender<(NodeId, Vec<u8>)>>>>;
 
 #[derive(Debug, Clone)]
 pub struct ConnectionManager {
+    #[allow(dead_code)]
     config: QuicConfig,
     endpoint: Arc<Endpoint>,
     connection_tx: mpsc::Sender<QuicConnection>,
     connections: Arc<Mutex<HashMap<NodeId, Arc<QuicConnection>>>>,
+    incoming_sender: IncomingMessageSender,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +70,7 @@ impl ConnectionManager {
             endpoint: Arc::new(endpoint),
             connection_tx,
             connections: Arc::new(Mutex::new(HashMap::new())),
+            incoming_sender: Arc::new(Mutex::new(None)),
         };
         Ok((transport, connection_rx))
     }
@@ -87,11 +91,13 @@ impl ConnectionManager {
                     // let manager_clone = manager_clone.clone();
                     match Self::accept_connection(incoming).await {
                         Ok((conn, msg_rx)) => {
-                            if let Err(e) = tx.send(conn).await {
+                            if let Err(e) = tx.send(conn.clone()).await {
                                 error!("Failed to send connection: {}", e);
                                 return;
                             }
-                            manager_clone.spawn_message_handler(msg_rx).await;
+                            manager_clone
+                                .spawn_message_handler(conn.node_id.clone(), msg_rx)
+                                .await;
                         }
                         Err(e) => {
                             error!("Connection failed: {}", e);
@@ -154,14 +160,33 @@ impl ConnectionManager {
         ))
     }
 
-    /// 生成消息处理任务
-    async fn spawn_message_handler(&self, mut receiver: Receiver<Vec<u8>>) {
+    /// 生成消息处理任务，将接收到的消息转发到注册的 incoming_sender（包含发送者 NodeId）
+    async fn spawn_message_handler(&self, peer_id: NodeId, mut receiver: Receiver<Vec<u8>>) {
+        let incoming = Arc::clone(&self.incoming_sender);
         tokio::spawn(async move {
             while let Some(data) = receiver.recv().await {
-                let message = String::from_utf8(data).unwrap();
-                info!("Received message: {}", message);
+                // forward to registered gossip handler if present
+                let maybe = incoming.lock().await;
+                if let Some(tx) = maybe.as_ref() {
+                    let _ = tx.send((peer_id.clone(), data)).await;
+                } else {
+                    let message = String::from_utf8(data).unwrap_or_default();
+                    info!("Received message from {}: {}", peer_id, message);
+                }
             }
         });
+    }
+
+    /// Register a channel to receive incoming messages from peers: (peer_id, bytes)
+    pub async fn register_incoming_sender(&self, tx: TokioSender<(NodeId, Vec<u8>)>) {
+        let mut guard = self.incoming_sender.lock().await;
+        *guard = Some(tx);
+    }
+
+    /// Return list of connected peer NodeIds
+    pub async fn list_peers(&self) -> Vec<NodeId> {
+        let connections = self.connections.lock().await;
+        connections.keys().cloned().collect()
     }
 
     pub async fn connect(
@@ -189,7 +214,7 @@ impl ConnectionManager {
             None => {
                 return Err(anyhow::anyhow!(
                     "Failed to connect to node[{}], no address available",
-                    target_node_id.to_string()
+                    target_node_id
                 ))
             }
         };
@@ -239,9 +264,12 @@ impl ConnectionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{identity::keypair::KeyPair, node::node::NodeType};
+    use crate::{
+        identity::keypair::KeyPair,
+        node::node::{Node, NodeType},
+    };
     use std::sync::Once;
-    use tokio::time::{sleep, Duration};
+    use tokio::time::Duration;
 
     static RUSTLS_INIT: Once = Once::new();
 

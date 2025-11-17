@@ -1,15 +1,14 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Map;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// P2P 仓库描述
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct P2PDescription {
-    pub creator: String, // NodeId
+    pub creator: String,
     pub name: String,
     pub description: String,
-    pub timestamp: u64, // Unix timestamp
+    pub timestamp: i64,
 }
 
 /// P2P 仓库
@@ -18,7 +17,7 @@ pub struct Repo {
     pub repo_id: String,
     pub refs: HashMap<String, String>,
     pub p2p_description: P2PDescription,
-    pub path: PathBuf, // Git 仓库本地路径
+    pub path: PathBuf,
 }
 
 impl Repo {

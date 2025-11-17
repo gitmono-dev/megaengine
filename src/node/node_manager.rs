@@ -16,9 +16,12 @@ impl NodeManager {
         }
     }
 
-    pub fn insert_node(&mut self, node: &Node) {
+    pub async fn insert_node(&mut self, node: &Node) {
         let routing = NodeRouting::new(node.node_id().clone(), node.addresses().to_vec());
         self.nodes.insert(node.node_id().clone(), routing);
+
+        // 持久化 NodeInfo
+        let _ = crate::storage::node_model::save_node_info_to_db(&node.info).await;
     }
 
     pub fn mark_alive(&mut self, node_id: &NodeId) {
@@ -46,7 +49,7 @@ impl NodeManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::keypair::{self, KeyPair};
+    use crate::identity::keypair::KeyPair;
     use crate::node::node::NodeType;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
@@ -63,13 +66,13 @@ mod tests {
         Node::new(node_id, alias, addresses, node_type, keypair.clone())
     }
 
-    #[test]
-    fn test_node_manager_insert_node() {
+    #[tokio::test]
+    async fn test_node_manager_insert_node() {
         let mut manager = NodeManager::new();
         let node = create_sample_node();
 
         // Insert the node
-        manager.insert_node(&node);
+        manager.insert_node(&node).await;
 
         // Assert that the node is in the manager
         assert_eq!(manager.nodes.len(), 1);
@@ -78,13 +81,13 @@ mod tests {
         assert_eq!(node_routing.unwrap().node_id, *node.node_id());
     }
 
-    #[test]
-    fn test_node_manager_mark_alive() {
+    #[tokio::test]
+    async fn test_node_manager_mark_alive() {
         let mut manager = NodeManager::new();
         let node = create_sample_node();
 
         // Insert the node
-        manager.insert_node(&node);
+        manager.insert_node(&node).await;
 
         // Get the initial last_seen time
         let initial_last_seen = manager.get_node(&node.node_id()).unwrap().last_seen;
@@ -97,12 +100,12 @@ mod tests {
         assert_ne!(initial_last_seen, refreshed_last_seen);
     }
 
-    #[test]
-    fn test_node_manager_cleanup_expired() {
+    #[tokio::test]
+    async fn test_node_manager_cleanup_expired() {
         let mut manager = NodeManager::new();
         let node = create_sample_node();
 
-        manager.insert_node(&node);
+        manager.insert_node(&node).await;
         assert_eq!(manager.nodes.len(), 1);
 
         manager.nodes.get_mut(&node.node_id()).unwrap().ttl = std::time::Duration::from_secs(1);
@@ -111,14 +114,14 @@ mod tests {
         assert_eq!(manager.nodes.len(), 0);
     }
 
-    #[test]
-    fn test_node_manager_routing_print() {
+    #[tokio::test]
+    async fn test_node_manager_routing_print() {
         let mut manager = NodeManager::new();
         let node1 = create_sample_node();
         let node2 = create_sample_node();
 
-        manager.insert_node(&node1);
-        manager.insert_node(&node2);
+        manager.insert_node(&node1).await;
+        manager.insert_node(&node2).await;
 
         let _ = std::panic::catch_unwind(|| {
             manager.routing_print();

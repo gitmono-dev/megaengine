@@ -1,73 +1,79 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::repo::repo::Repo;
+use crate::storage::repo_model::{
+    delete_repo_from_db, list_repos, load_repo_from_db, save_repo_to_db,
+};
+use anyhow::Result;
 
 /// 仓库管理器
-/// 管理本地仓库和 P2P 仓库的对应关系
-pub struct RepoManager {
-    // RepoId -> Repo 映射
-    repos: HashMap<String, Repo>,
-    // 本地路径 -> RepoId 映射
-    path_to_repo_id: HashMap<PathBuf, String>,
-}
+/// 管理本地仓库和 P2P 仓库的对应关系，并支持数据库持久化
+pub struct RepoManager {}
 
 impl RepoManager {
     /// 创建新的仓库管理器
     pub fn new() -> Self {
-        RepoManager {
-            repos: HashMap::new(),
-            path_to_repo_id: HashMap::new(),
-        }
+        RepoManager {}
     }
 
     /// 注册仓库
-    pub fn register_repo(&mut self, repo: Repo) -> Result<(), String> {
-        let repo_id = repo.repo_id.clone();
-        let path = repo.path.clone();
+    pub async fn register_repo(&mut self, repo: Repo) -> Result<(), String> {
+        save_repo_to_db(&repo).await.map_err(|e| e.to_string())?;
 
-        if self.repos.contains_key(&repo_id) {
-            return Err(format!("Repository {} already exists", repo_id));
-        }
-
-        self.repos.insert(repo_id.clone(), repo);
-        self.path_to_repo_id.insert(path, repo_id);
         Ok(())
     }
 
     /// 根据 RepoId 获取仓库
-    pub fn get_repo(&self, repo_id: &str) -> Option<&Repo> {
-        self.repos.get(repo_id)
-    }
-
-    /// 根据 RepoId 获取仓库（可变）
-    pub fn get_repo_mut(&mut self, repo_id: &str) -> Option<&mut Repo> {
-        self.repos.get_mut(repo_id)
+    pub async fn get_repo(&self, repo_id: &str) -> Result<Option<Repo>> {
+        let repo = load_repo_from_db(repo_id).await?;
+        Ok(repo)
     }
 
     /// 根据路径获取仓库 ID
-    pub fn get_repo_id_by_path(&self, path: &PathBuf) -> Option<&String> {
-        self.path_to_repo_id.get(path)
+    pub async fn get_repo_id_by_path(&self, path: &PathBuf) -> Result<Option<String>> {
+        // 回退到数据库查询
+        let repos = list_repos().await?;
+        for repo in repos {
+            if &repo.path == path {
+                return Ok(Some(repo.repo_id));
+            }
+        }
+        Ok(None)
     }
 
     /// 删除仓库
-    pub fn remove_repo(&mut self, repo_id: &str) -> Option<Repo> {
-        if let Some(repo) = self.repos.remove(repo_id) {
-            self.path_to_repo_id.remove(&repo.path);
-            Some(repo)
+    pub async fn remove_repo(&mut self, repo_id: &str) -> Result<Option<Repo>> {
+        // 先从数据库加载 repo，返回给调用方；再删除数据库记录
+        if let Some(repo) = load_repo_from_db(repo_id).await? {
+            // 删除数据库记录
+            delete_repo_from_db(repo_id).await?;
+
+            Ok(Some(repo))
         } else {
-            None
+            Ok(None)
         }
     }
 
     /// 列出所有仓库
-    pub fn list_repos(&self) -> Vec<&Repo> {
-        self.repos.values().collect()
+    pub async fn list_repos(&self) -> Result<Vec<Repo>> {
+        let repos = list_repos().await?;
+        Ok(repos)
     }
 
     /// 获取仓库数量
-    pub fn repo_count(&self) -> usize {
-        self.repos.len()
+    pub async fn repo_count(&self) -> Result<usize> {
+        let repos = list_repos().await?;
+        Ok(repos.len())
+    }
+
+    /// 更新 Repo 的 refs（会自动持久化到数据库）
+    pub async fn update_repo(&mut self, repo: Repo) -> Result<()> {
+        if (load_repo_from_db(repo.repo_id.as_str()).await?).is_some() {
+            save_repo_to_db(&repo).await?;
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Repository {} not found", repo.repo_id))
+        }
     }
 }
 
@@ -83,8 +89,8 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_repo_manager() {
+    #[tokio::test]
+    async fn test_repo_manager() -> Result<()> {
         let mut manager = RepoManager::new();
 
         let desc = P2PDescription {
@@ -100,8 +106,47 @@ mod tests {
             PathBuf::from("/tmp/test-repo"),
         );
 
-        assert!(manager.register_repo(repo).is_ok());
-        assert_eq!(manager.repo_count(), 1);
-        assert!(manager.get_repo("did:repo:test").is_some());
+        let before = manager.repo_count().await?;
+        assert!(manager.register_repo(repo).await.is_ok());
+        let count = manager.repo_count().await?;
+        // 可能存在旧数据，确保数量不减少并且能通过 id 读取到刚注册的 repo
+        assert!(count >= before);
+        let loaded = manager.get_repo("did:repo:test").await?;
+        assert!(loaded.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_repo_manager_with_persistence() -> Result<()> {
+        // 持久化现在为默认行为
+        let mut manager = RepoManager::new();
+
+        let desc = P2PDescription {
+            creator: "did:key:test".to_string(),
+            name: "test-repo-persist".to_string(),
+            description: "A test repository with persistence".to_string(),
+            timestamp: 2000,
+        };
+
+        let repo = Repo::new(
+            "did:repo:test-persist".to_string(),
+            desc,
+            PathBuf::from("/tmp/test-repo-persist"),
+        );
+
+        let before = manager.repo_count().await?;
+        assert!(manager.register_repo(repo).await.is_ok());
+        let count = manager.repo_count().await?;
+        assert!(count >= before);
+
+        // 删除仓库
+        let result = manager.remove_repo("did:repo:test-persist").await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_some());
+        // 验证数据库中已删除该 repo
+        let loaded_after = manager.get_repo("did:repo:test-persist").await?;
+        assert!(loaded_after.is_none());
+
+        Ok(())
     }
 }
