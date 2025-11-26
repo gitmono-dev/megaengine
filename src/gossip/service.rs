@@ -25,6 +25,12 @@ pub struct GossipService {
     seen: Arc<Mutex<HashMap<String, Instant>>>,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+struct Envelope {
+    payload: SignedMessage,
+    ttl: u8,
+}
+
 impl GossipService {
     pub fn new(
         manager: Arc<Mutex<ConnectionManager>>,
@@ -61,12 +67,6 @@ impl GossipService {
         let s2 = Arc::clone(&self);
         tokio::spawn(async move {
             loop {
-                #[derive(Serialize, Deserialize, Clone)]
-                struct Envelope {
-                    payload: SignedMessage,
-                    ttl: u8,
-                }
-
                 // 1. 发送 NodeAnnouncement
                 if let Ok(signed) = SignedMessage::new_node_sign_message(s2.node.clone()) {
                     let env = Envelope {
@@ -76,6 +76,7 @@ impl GossipService {
                     let data = serde_json::to_vec(&env).unwrap_or_default();
                     let mgr = s2.manager.lock().await;
                     let peers = mgr.list_peers().await;
+                    tracing::debug!("Send NodeAnnouncement to {} peers", peers.len());
                     for peer in peers {
                         let _ = mgr.send_message(peer.clone(), data.clone()).await;
                     }
@@ -121,11 +122,6 @@ impl GossipService {
 
     async fn handle_incoming(&self, from: NodeId, data: Vec<u8>) -> Result<()> {
         // Try parse as Envelope (with ttl). If not, fall back to raw SignedMessage.
-        #[derive(Serialize, Deserialize, Clone)]
-        struct Envelope {
-            payload: SignedMessage,
-            ttl: u8,
-        }
 
         let (signed, mut ttl) = if let Ok(env) = serde_json::from_slice::<Envelope>(&data) {
             (env.payload, env.ttl)
@@ -169,11 +165,12 @@ impl GossipService {
         // process message (borrow the inner message to avoid moving)
         match &signed.message {
             GossipMessage::NodeAnnouncement(na) => {
-                tracing::info!(
-                    "Gossip: NodeAnnouncement from {} (alias: {}, addresses: {:?})",
+                tracing::debug!(
+                    "Gossip: NodeAnnouncement from {} (alias: {}, addresses: {:?}, timestamp: {})",
                     na.node_id,
                     na.alias,
                     na.addresses,
+                    signed.timestamp(),
                 );
 
                 // 将节点信息保存到数据库
@@ -190,7 +187,7 @@ impl GossipService {
                 }
             }
             GossipMessage::RepoAnnouncement(ra) => {
-                tracing::info!(
+                tracing::debug!(
                     "Gossip: RepoAnnouncement from {} with {} repos: {:?}",
                     ra.node_id,
                     ra.repos.len(),

@@ -190,11 +190,6 @@ mod tests {
             "Loaded keypair should match saved keypair"
         );
 
-        // cleanup
-        let path = keypair_path();
-        if path.exists() {
-            fs::remove_file(path)?;
-        }
         Ok(())
     }
 }

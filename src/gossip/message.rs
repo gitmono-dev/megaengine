@@ -110,6 +110,7 @@ impl SignedMessage {
 
         hasher.update(self.node_id.0.as_bytes());
         hasher.update(&message_bytes);
+        hasher.update(self.timestamp.to_le_bytes());
         hasher.finalize().to_vec()
     }
 
