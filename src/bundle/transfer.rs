@@ -1,5 +1,8 @@
 use crate::node::node_id::NodeId;
+use crate::storage::repo_model;
 use crate::transport::quic::ConnectionManager;
+use crate::util::get_node_id_last_part;
+use crate::util::get_repo_id_last_part;
 use anyhow::Context;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -10,7 +13,10 @@ use tracing::{debug, info, warn};
 
 /// Bundle 消息类型（用于多帧传输）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-enum BundleMessageType {
+pub enum BundleMessageType {
+    Request {
+        repo_id: String,
+    },
     /// 开始传输：包含文件元数据
     Start {
         repo_id: String,
@@ -24,7 +30,9 @@ enum BundleMessageType {
         data: Vec<u8>,
     },
     /// 传输完成
-    Done { repo_id: String },
+    Done {
+        repo_id: String,
+    },
 }
 
 /// Bundle 文件传输管理器
@@ -138,8 +146,10 @@ impl BundleTransferManager {
         // 反序列化消息
         let msg: BundleMessageType =
             serde_json::from_slice(&data).context("Failed to deserialize bundle message")?;
-
         match msg {
+            BundleMessageType::Request { repo_id } => {
+                self.handle_bundle_request(&from, &repo_id).await
+            }
             BundleMessageType::Start {
                 repo_id,
                 file_name,
@@ -163,8 +173,78 @@ impl BundleTransferManager {
     /// 将 NodeId 编码为合法的目录名（替换非法字符）
     fn encode_node_id(node_id: &NodeId) -> String {
         let id_str = node_id.to_string();
-        // 将 : 替换为 _，其他非法字符也替换
-        id_str.replace(':', "_").replace('/', "_")
+        get_node_id_last_part(&id_str)
+    }
+
+    /// 处理 Request 消息：检查本地 repo 是否存在，如果存在则生成 bundle 并发送
+    async fn handle_bundle_request(&self, from: &NodeId, repo_id: &str) -> Result<()> {
+        info!("Received bundle request from {} for repo {}", from, repo_id);
+
+        // 检查本地是否有该 repo
+        match crate::storage::repo_model::load_repo_from_db(repo_id).await {
+            Ok(Some(repo)) => {
+                // repo 存在，检查是否是本地 repo（不是 external）
+                if repo.is_external {
+                    warn!(
+                        "Cannot send bundle for external repo {} to {}",
+                        repo_id, from
+                    );
+                    return Ok(());
+                }
+
+                let repo_path = repo.path.to_string_lossy().to_string();
+                let bundle_dir = self.storage_dir.clone();
+                let bundle_file_name = format!("{}.bundle", get_repo_id_last_part(repo_id));
+                let bundle_path = bundle_dir.join(&bundle_file_name);
+
+                info!(
+                    "Found local repo {} at {}, generating bundle for request from {}",
+                    repo_id, repo_path, from
+                );
+
+                // 生成 bundle 文件（同步操作，需要在线程中运行）
+                let repo_path_clone = repo_path.clone();
+                let bundle_path_clone = bundle_path.clone();
+
+                tokio::task::spawn_blocking(move || {
+                    crate::git::pack::pack_repo_bundle(
+                        &repo_path_clone,
+                        bundle_path_clone.to_str().unwrap_or(""),
+                    )
+                })
+                .await
+                .context("Failed to spawn bundle packing task")??;
+
+                info!("Bundle generated successfully for repo {}", repo_id);
+
+                // 发送 bundle 给请求者
+                self.send_bundle(
+                    from.clone(),
+                    repo_id.to_string(),
+                    bundle_path.to_str().unwrap_or(""),
+                )
+                .await
+                .context("Failed to send bundle in response to request")?;
+
+                info!("Bundle for repo {} sent successfully to {}", repo_id, from);
+
+                Ok(())
+            }
+            Ok(None) => {
+                warn!(
+                    "Received bundle request for non-existent repo {} from {}",
+                    repo_id, from
+                );
+                Ok(())
+            }
+            Err(e) => {
+                warn!(
+                    "Error checking repo {} for bundle request from {}: {}",
+                    repo_id, from, e
+                );
+                Ok(())
+            }
+        }
     }
 
     /// 处理 START 消息
@@ -199,7 +279,8 @@ impl BundleTransferManager {
     ) -> Result<()> {
         let encoded_id = Self::encode_node_id(from);
         let dir = self.storage_dir.join(&encoded_id);
-        let file_path = dir.join(format!("{}.bundle", repo_id));
+        let encoded_repo_id = get_repo_id_last_part(repo_id);
+        let file_path = dir.join(format!("{}.bundle", encoded_repo_id));
 
         // 追加写入到文件
         let mut file = fs::OpenOptions::new()
@@ -214,7 +295,7 @@ impl BundleTransferManager {
             .await
             .context("Failed to write chunk data")?;
 
-        debug!(
+        info!(
             "Received chunk {} ({} bytes) for repo {} from {}",
             chunk_idx,
             data.len(),
@@ -229,13 +310,16 @@ impl BundleTransferManager {
     async fn handle_bundle_done(&self, from: &NodeId, repo_id: &str) -> Result<()> {
         let encoded_id = Self::encode_node_id(from);
         let dir = self.storage_dir.join(&encoded_id);
-        let file_path = dir.join(format!("{}.bundle", repo_id));
+        let encoded_repo_id = get_repo_id_last_part(repo_id);
+        let file_path = dir.join(format!("{}.bundle", encoded_repo_id));
 
         if file_path.exists() {
             let metadata = fs::metadata(&file_path)
                 .await
                 .context("Failed to get bundle file metadata")?;
-
+            // 标记 bundle 已接收
+            let bundle_path = file_path.to_string_lossy().to_string();
+            repo_model::update_repo_bundle(repo_id, &bundle_path).await?;
             info!(
                 "Bundle transfer completed from {}: repo={}, file_size={} bytes",
                 from,

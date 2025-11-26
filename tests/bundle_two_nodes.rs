@@ -1,6 +1,6 @@
 //! 集成测试：两个节点之间通过网络传输 bundle
 use megaengine::bundle::BundleService;
-use megaengine::git::pack::pack_repo_bundle;
+use megaengine::git::pack::{pack_repo_bundle, restore_repo_from_bundle};
 use megaengine::gossip::GossipService;
 use megaengine::identity::keypair::KeyPair;
 use megaengine::node::node::{Node, NodeType};
@@ -266,13 +266,26 @@ async fn test_bundle_transfer_between_two_nodes() {
     println!("\n📋 Step 8: Verifying bundle reception");
     // Check if bundle was received
     // The bundle is stored in the receiver's storage with encoded sender_node_id directory
-    let encoded_sender_id = sender_node
-        .node_id()
-        .to_string()
-        .replace(':', "_")
-        .replace('/', "_");
-    let received_bundle_path =
-        receiver_bundle_storage.join(format!("{}/test_transfer_repo.bundle", encoded_sender_id));
+    // encode_node_id 函数提取 NodeId 的最后一段并用 _ 替换 :
+    let sender_node_id_str = sender_node.node_id().to_string();
+    // 提取最后一段（NodeId 格式是 "did:key:xxx"）
+    let last_segment = sender_node_id_str
+        .split(':')
+        .last()
+        .unwrap_or(&sender_node_id_str);
+    let encoded_sender_id = last_segment.replace(':', "_").replace('/', "_");
+
+    // repo_id 会被处理为最后一段（用 : 分割）
+    let repo_id_last_part = "test_transfer_repo"
+        .split(':')
+        .last()
+        .unwrap_or("test_transfer_repo")
+        .to_string();
+
+    let received_bundle_path = receiver_bundle_storage.join(format!(
+        "{}/{}.bundle",
+        encoded_sender_id, repo_id_last_part
+    ));
 
     if received_bundle_path.exists() {
         let received_size = fs::metadata(&received_bundle_path)
@@ -293,49 +306,49 @@ async fn test_bundle_transfer_between_two_nodes() {
         }
 
         println!("\n📋 Step 9: Verifying bundle content by restoration");
-        // Verify bundle by restoring it
-        let restored_repo_path = "./tmp/restored_repo_from_transfer";
-        fs::remove_dir_all(restored_repo_path).ok();
-        fs::create_dir_all(restored_repo_path).ok();
+        // Verify bundle by restoring it using the provided utility function
+        let restored_repo_path = std::env::current_dir()
+            .unwrap()
+            .join("tmp/restored_repo_from_transfer");
 
-        let restore_success = Command::new("git")
-            .args(&[
-                "clone",
-                received_bundle_path.to_str().unwrap(),
-                restored_repo_path,
-            ])
-            .output()
-            .map(|output| output.status.success())
-            .unwrap_or(false);
+        fs::remove_dir_all(&restored_repo_path).ok();
 
-        if restore_success {
-            println!("✅ Bundle successfully restored to new repository");
+        match restore_repo_from_bundle(
+            received_bundle_path.to_str().unwrap(),
+            restored_repo_path.to_str().unwrap(),
+        )
+        .await
+        {
+            Ok(_) => {
+                println!("✅ Bundle successfully restored to new repository");
 
-            // Verify files exist
-            let readme_path = PathBuf::from(restored_repo_path).join("README.md");
-            let data_path = PathBuf::from(restored_repo_path).join("data.txt");
+                // Verify files exist
+                let readme_path = restored_repo_path.join("README.md");
+                let data_path = restored_repo_path.join("data.txt");
 
-            if readme_path.exists() && data_path.exists() {
-                println!("✅ All expected files found in restored repository");
+                if readme_path.exists() && data_path.exists() {
+                    println!("✅ All expected files found in restored repository");
 
-                // Check commit history
-                let output = Command::new("git")
-                    .current_dir(restored_repo_path)
-                    .args(&["log", "--oneline"])
-                    .output()
-                    .expect("Failed to get git log");
+                    // Check commit history
+                    let output = Command::new("git")
+                        .current_dir(restored_repo_path.to_str().unwrap())
+                        .args(&["log", "--oneline"])
+                        .output()
+                        .expect("Failed to get git log");
 
-                let log = String::from_utf8_lossy(&output.stdout);
-                if log.contains("Initial commit for transfer test") {
-                    println!("✅ Commit history preserved in restored repository");
+                    let log = String::from_utf8_lossy(&output.stdout);
+                    if log.contains("Initial commit for transfer test") {
+                        println!("✅ Commit history preserved in restored repository");
+                    } else {
+                        println!("⚠️ Original commit message not found in restored repo");
+                    }
                 } else {
-                    println!("⚠️ Original commit message not found in restored repo");
+                    println!("❌ Some expected files not found in restored repository");
                 }
-            } else {
-                println!("❌ Some expected files not found in restored repository");
             }
-        } else {
-            println!("❌ Failed to restore bundle");
+            Err(e) => {
+                println!("❌ Failed to restore bundle: {}", e);
+            }
         }
 
         println!("\n📋 Step 10: Cleanup");

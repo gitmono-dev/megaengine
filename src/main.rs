@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use megaengine::bundle::BundleService;
 use megaengine::git::git_repo::{repo_name_space, repo_root_commit_bytes};
-use megaengine::git::pack::pack_repo_bundle;
+use megaengine::git::pack::restore_repo_from_bundle;
 use megaengine::node::node_addr::NodeAddr;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -88,19 +88,12 @@ enum RepoAction {
     },
     /// List all repositories
     List,
-    /// Pack a repository into a distributable format
-    Pack {
-        /// Repository path to pack
-        #[arg(long)]
-        path: String,
-
-        /// Output file path for the bundle
+    Clone {
         #[arg(long)]
         output: String,
 
-        /// Pack format: bundle, tar, or metadata
-        #[arg(long, default_value = "bundle")]
-        format: String,
+        #[arg(long)]
+        repo_id: String,
     },
 }
 
@@ -211,13 +204,20 @@ async fn main() -> Result<()> {
                     tracing::info!("Gossip protocol started");
 
                     // 启动 Bundle 传输服务
-                    let bundle_storage = std::path::PathBuf::from("./data/bundles");
+                    let bundles_dir = PathBuf::from(format!("{}/bundles", &root_path));
+                    let bundle_storage = bundles_dir.clone();
                     let bundle_service = std::sync::Arc::new(BundleService::new(
                         std::sync::Arc::clone(conn_mgr),
                         bundle_storage,
                     ));
-                    tokio::spawn(bundle_service.start());
+                    tokio::spawn(bundle_service.clone().start());
                     tracing::info!("Bundle transfer service started");
+
+                    // 启动 Bundle 同步后台任务：定时检查 external repos 并请求 bundle
+                    let bundle_service_for_sync = std::sync::Arc::new(tokio::sync::Mutex::new(
+                        BundleService::new(std::sync::Arc::clone(conn_mgr), bundles_dir),
+                    ));
+                    megaengine::bundle::start_bundle_sync_task(bundle_service_for_sync).await;
                 } else {
                     tracing::warn!("No connection manager found, services not started");
                 }
@@ -376,29 +376,65 @@ async fn main() -> Result<()> {
                     println!("Failed to list repositories: {}", e);
                 }
             },
-            RepoAction::Pack {
-                path,
-                output,
-                format,
-            } => match format.as_str() {
-                "bundle" => match pack_repo_bundle(&path, &output) {
-                    Ok(_) => {
-                        let file_size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
-                        println!("✓ Bundle created successfully");
-                        println!("  Output: {}", output);
-                        println!("  Size: {} bytes", file_size);
+            RepoAction::Clone { output, repo_id } => {
+                // 查询数据库获取 repo 信息
+                match storage::repo_model::load_repo_from_db(&repo_id).await {
+                    Ok(Some(repo)) => {
+                        // 检查 bundle 是否存在
+                        if repo.bundle.as_os_str().is_empty()
+                            || repo.bundle.to_string_lossy().is_empty()
+                        {
+                            tracing::error!(
+                                "Repository {} has no bundle available for cloning",
+                                repo_id
+                            );
+                            println!("Error: Repository {} has no bundle available", repo_id);
+                            return Ok(());
+                        }
+
+                        let bundle_path = repo.bundle.to_string_lossy().to_string();
+                        if !std::path::Path::new(&bundle_path).exists() {
+                            tracing::error!("Bundle file not found at path: {}", bundle_path);
+                            println!("Error: Bundle file not found at {}", bundle_path);
+                            return Ok(());
+                        }
+
+                        // 使用 git pack 模块中的函数恢复仓库
+                        tracing::info!(
+                            "Cloning repository {} from bundle {} to {}",
+                            repo_id,
+                            bundle_path,
+                            output
+                        );
+
+                        match restore_repo_from_bundle(&bundle_path, &output).await {
+                            Ok(_) => {
+                                tracing::info!(
+                                    "Repository {} cloned successfully to {}",
+                                    repo_id,
+                                    output
+                                );
+                                println!("✅ Repository cloned successfully to {}", output);
+                                println!("  Repository: {}", repo.p2p_description.name);
+                                println!("  Creator: {}", repo.p2p_description.creator);
+                                println!("  Description: {}", repo.p2p_description.description);
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to clone repository: {}", e);
+                                println!("Error: Failed to clone repository: {}", e);
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        tracing::error!("Repository {} not found in database", repo_id);
+                        println!("Error: Repository {} not found", repo_id);
                     }
                     Err(e) => {
-                        eprintln!("✗ Failed to create bundle: {}", e);
+                        tracing::error!("Failed to query repository {}: {}", repo_id, e);
+                        println!("Error: Failed to query repository: {}", e);
                     }
-                },
-                _ => {
-                    eprintln!(
-                        "✗ Unknown format: {}. Use 'bundle', 'tar', or 'metadata'",
-                        format
-                    );
                 }
-            },
+            }
         },
     }
 

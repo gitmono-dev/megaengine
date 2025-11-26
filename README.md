@@ -6,7 +6,9 @@ MegaEngine is a distributed peer-to-peer (P2P) network for Git repositories. It 
 
 - **Decentralized Node Discovery**: Nodes automatically discover each other and exchange node information via gossip protocol
 - **Repository Synchronization**: Nodes announce and sync repository inventory across the network
-- **Repository Packing**: Pack Git repositories into bundle
+- **Bundle Transfer**: P2P transfer of Git bundle files between nodes with integrity verification
+- **Automatic Bundle Sync**: Periodic background task that automatically downloads bundles for external repositories
+- **Repository Cloning**: Clone repositories from bundles using the `repo clone` command
 - **QUIC Transport**: Uses QUIC protocol for reliable, low-latency peer-to-peer communication
 - **Gossip Protocol**: Implements epidemic message propagation with TTL and deduplication
 - **Cryptographic Identity**: Each node has a unique EdDSA-based identity (`did:key` format)
@@ -121,6 +123,20 @@ cargo run -- repo add \
 
 The repo ID is automatically generated from the Git root commit hash and the node's public key.
 
+### 5. Clone a Repository
+
+Clone a repository from bundle using its repo ID:
+
+```bash
+cargo run -- repo clone \
+  --repo-id <repo_id> \
+  --output /path/to/clone
+```
+
+Requirements:
+- Repository must exist in the database
+- Bundle file must be downloaded (via automatic sync or transfer)
+
 
 ## 🧪 Testing
 
@@ -156,6 +172,32 @@ did:repo:zW1iF5iwCChifAcjZUrDbwD9o8LS76kFsz6bTZFEJhEqVCU
 - **TTL (Time-to-Live)**: Default 16 hops, decremented on each relay
 - **Deduplication**: Tracks seen message hashes in a 5-minute sliding window
 - **Broadcast Interval**: 10 seconds
+
+## 📦 Bundle Transfer Protocol
+
+MegaEngine implements a multi-frame bundle transfer protocol for P2P repository synchronization:
+
+### Message Types
+
+- **Request**: Request a bundle for a repository from a peer
+- **Start**: Initiates bundle transfer with metadata (file_name, total_size)
+- **Chunk**: Transfers data in 64KB chunks
+- **Done**: Signals transfer completion
+
+### Workflow
+
+1. **Discovery**: Node learns about external repository via gossip
+2. **Request**: Background task periodically requests missing bundles from repo owner
+3. **Generation**: Owner generates bundle from local repository
+4. **Transfer**: Bundle is sent to requester in multiple frames
+5. **Storage**: Received bundle is stored locally and marked in database
+6. **Restoration**: User can clone repository from stored bundle
+
+### Automatic Synchronization
+
+- Runs every 60 seconds by default
+- Checks for external repositories with empty bundle field
+- Automatically requests missing bundles from repository owners
 
 ## 💾 Storage
 

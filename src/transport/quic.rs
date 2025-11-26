@@ -218,15 +218,6 @@ impl ConnectionManager {
         *guard = Some(tx);
     }
 
-    /// 向后兼容：注册 incoming 消息接收器（废弃，改用 register_gossip_sender）
-    #[deprecated(
-        since = "0.2.0",
-        note = "Use `register_gossip_sender()` instead for Gossip messages"
-    )]
-    pub async fn register_incoming_sender(&self, tx: TokioSender<(NodeId, Vec<u8>)>) {
-        self.register_gossip_sender(tx).await;
-    }
-
     /// Return list of connected peer NodeIds
     pub async fn list_peers(&self) -> Vec<NodeId> {
         let connections = self.connections.lock().await;

@@ -1,3 +1,4 @@
+use crate::bundle::transfer::BundleMessageType;
 use crate::bundle::transfer::BundleTransferManager;
 use crate::node::node_id::NodeId;
 use crate::transport::quic::ConnectionManager;
@@ -13,6 +14,10 @@ use tokio::sync::Mutex;
 pub struct BundleService {
     connection_manager: Arc<Mutex<ConnectionManager>>,
     bundle_manager: Arc<BundleTransferManager>,
+}
+pub struct BundleRequest {
+    pub requester_id: NodeId,
+    pub repo_id: String,
 }
 
 impl BundleService {
@@ -67,5 +72,29 @@ impl BundleService {
     /// 获取接收的 bundle 文件路径
     pub fn get_bundle_path(&self, from: &NodeId, repo_id: &str) -> PathBuf {
         self.bundle_manager.get_bundle_path(from, repo_id)
+    }
+
+    /// 向指定节点请求 bundle（发送 Request 消息）
+    pub async fn request_bundle(&self, target_node_id: &NodeId, repo_id: &str) -> Result<()> {
+        // 构造 Request 消息
+        let start_msg = BundleMessageType::Request {
+            repo_id: repo_id.to_string(),
+        };
+
+        let payload = serde_json::to_vec(&start_msg)?;
+
+        let mgr = self.connection_manager.lock().await;
+        let peers = mgr.list_peers().await;
+        tracing::info!("Sent bundle peers: {:?}", peers);
+        mgr.send_data_message(target_node_id.clone(), payload)
+            .await?;
+
+        tracing::info!(
+            "Bundle request sent to {} for repo {}",
+            target_node_id,
+            repo_id
+        );
+
+        Ok(())
     }
 }
