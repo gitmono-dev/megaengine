@@ -39,10 +39,11 @@ impl NodeAddr {
     pub fn new(peer_id: NodeId, address: SocketAddr) -> Self {
         NodeAddr { peer_id, address }
     }
+}
 
-    /// Format node address as string
-    pub fn to_string(&self) -> String {
-        format!("{}@{}", self.peer_id, self.address)
+impl std::fmt::Display for NodeAddr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}@{}", self.peer_id, self.address)
     }
 }
 

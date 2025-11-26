@@ -283,7 +283,7 @@ async fn main() -> Result<()> {
 
                 // 打印 node 地址
                 let addr = NodeAddr::new(node.node_id().clone(), addr.parse()?);
-                println!("Node address: {}", addr.to_string());
+                println!("Node address: {}", addr);
 
                 println!("Press Ctrl+C to stop");
 

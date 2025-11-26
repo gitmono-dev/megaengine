@@ -28,26 +28,23 @@ pub fn pack_repo_bundle(repo_path: &str, output_path: &str) -> Result<()> {
 
     // Get all branches to include in the bundle
     let mut branch_refs = Vec::new();
-    let mut branches = repo
+    let branches = repo
         .branches(None)
         .map_err(|e| anyhow::anyhow!("failed to list branches: {}", e))?;
 
-    while let Some(branch_result) = branches.next() {
+    for branch_result in branches {
         let (branch, _) =
             branch_result.map_err(|e| anyhow::anyhow!("failed to get branch: {}", e))?;
-        if let Ok(name) = branch.name() {
-            if let Some(name_str) = name {
-                branch_refs.push(name_str.to_string());
-            }
+        if let Ok(Some(name_str)) = branch.name() {
+            branch_refs.push(name_str.to_string());
         }
     }
 
     // If no branches found, try to get HEAD
-    if branch_refs.is_empty() {
-        if repo.head().is_ok() {
+    if branch_refs.is_empty()
+        && repo.head().is_ok() {
             branch_refs.push("HEAD".to_string());
         }
-    }
 
     if branch_refs.is_empty() {
         return Err(anyhow::anyhow!("no branches found to bundle"));
