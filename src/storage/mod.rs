@@ -1,6 +1,6 @@
 pub mod node_model;
-pub mod repo_model;
 pub mod ref_model;
+pub mod repo_model;
 
 use anyhow::Result;
 use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseConnection};

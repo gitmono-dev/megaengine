@@ -154,6 +154,49 @@ Replace `<repo_id>` with the ID from Step 3.
 
 The cloned repository will be available at `./tiny` on node2.
 
+### Step 7: Repository Update Synchronization
+
+When the repository creator (node1) pushes new commits, node2 will automatically synchronize them.
+
+**Terminal 3** - Make a change in the original repository on node1:
+```bash
+cd E:\git_test\tiny
+# Add or modify some files
+echo "Updated content" >> README.md
+git add README.md
+git commit -m "Update repository"
+```
+
+**Terminal 3** - Update the repository bundle on node1:
+```bash
+cargo run -- repo list
+```
+
+You'll see the status indicator changes to `⚠️  HAS UPDATES`, showing new commits are available.
+
+**Terminal 3** - Node2 will automatically discover and download the updated bundle
+
+Monitor Terminal 2 output - you should see automatic bundle sync activity. The background task runs every 60 seconds and will:
+1. Detect the repository update announcement via gossip protocol
+2. Request the updated bundle from node1
+3. Download and store the new bundle
+
+**Terminal 3** - Check repository status on node2:
+```bash
+cargo run -- --root ~/.megaengine2 repo list
+```
+
+You should see the repository status has changed, indicating updates are available.
+
+**Terminal 3** - Pull the latest updates to the cloned repository on node2:
+```bash
+cargo run -- --root ~/.megaengine2 repo pull --repo-id <repo_id>
+```
+
+Replace `<repo_id>` with the repository ID from Step 3.
+
+The cloned repository at `./tiny` will be updated with the latest commits from the bundle.
+
 
 
 ## 🔐 Data Formats

@@ -25,7 +25,7 @@ pub struct GossipService {
     seen: Arc<Mutex<HashMap<String, Instant>>>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 struct Envelope {
     payload: SignedMessage,
     ttl: u8,
@@ -73,6 +73,7 @@ impl GossipService {
                         payload: signed,
                         ttl: DEFAULT_TTL,
                     };
+                    tracing::debug!("Broadcasting NodeAnnouncement: {:?}", env);
                     let data = serde_json::to_vec(&env).unwrap_or_default();
                     let mgr = s2.manager.lock().await;
                     let peers = mgr.list_peers().await;
@@ -92,6 +93,7 @@ impl GossipService {
                                 payload: signed,
                                 ttl: DEFAULT_TTL,
                             };
+                            tracing::debug!("Broadcasting RepoAnnouncement: {:?}", env);
                             let data = serde_json::to_vec(&env).unwrap_or_default();
                             let mgr = s2.manager.lock().await;
                             let peers = mgr.list_peers().await;
@@ -102,7 +104,7 @@ impl GossipService {
                     }
                 }
 
-                tokio::time::sleep(Duration::from_secs(10)).await;
+                tokio::time::sleep(Duration::from_secs(30)).await;
             }
         });
 
@@ -195,18 +197,177 @@ impl GossipService {
                 );
                 // 将每个 repo 保存到数据库
                 for repo in &ra.repos {
-                    // 检查仓库是否已存在，如果存在则跳过
-                    if let Ok(Some(_)) =
-                        crate::storage::repo_model::load_repo_from_db(&repo.repo_id).await
-                    {
-                        tracing::debug!("Repo {} already exists, skipping", &repo.repo_id);
-                        continue;
-                    }
+                    // 检查仓库是否已存在
+                    match crate::storage::repo_model::load_repo_from_db(&repo.repo_id).await {
+                        Ok(Some(local_repo)) => {
+                            // 如果是本地仓库，不更新
+                            if !local_repo.is_external {
+                                tracing::debug!(
+                                    "Repo {} is a local repository, skipping update",
+                                    &repo.repo_id
+                                );
+                                continue;
+                            }
 
-                    let mut repo = repo.clone();
-                    repo.is_external = true;
-                    if let Err(e) = crate::storage::repo_model::save_repo_to_db(&repo).await {
-                        tracing::warn!("Failed to save remote repo {} to db: {}", &repo.repo_id, e);
+                            // Repo 已存在，检查是否需要更新
+                            tracing::debug!(
+                                "Repo {} already exists, checking if update needed",
+                                &repo.repo_id
+                            );
+
+                            // 比较 refs：从 bundle 中提取本地 refs
+                            let local_refs = if !local_repo.bundle.as_os_str().is_empty() {
+                                // Bundle 存在，从 bundle 中提取 refs
+                                let bundle_path = local_repo.bundle.to_string_lossy().to_string();
+                                match crate::git::pack::extract_bundle_refs(&bundle_path) {
+                                    Ok(refs) => {
+                                        tracing::debug!(
+                                            "Extracted {} refs from bundle for repo {}",
+                                            refs.len(),
+                                            &repo.repo_id
+                                        );
+                                        refs
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Failed to extract refs from bundle for repo {}: {}",
+                                            &repo.repo_id,
+                                            e
+                                        );
+                                        // 如果 bundle 提取失败，从数据库读取 refs 作为备份
+                                        match crate::storage::ref_model::load_refs_for_repo(
+                                            &repo.repo_id,
+                                        )
+                                        .await
+                                        {
+                                            Ok(refs) => refs,
+                                            Err(e2) => {
+                                                tracing::warn!(
+                                                    "Failed to load local refs for repo {}: {}",
+                                                    &repo.repo_id,
+                                                    e2
+                                                );
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                // Bundle 不存在，从数据库读取 refs
+                                match crate::storage::ref_model::load_refs_for_repo(&repo.repo_id)
+                                    .await
+                                {
+                                    Ok(refs) => refs,
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Failed to load local refs for repo {}: {}",
+                                            &repo.repo_id,
+                                            e
+                                        );
+                                        continue;
+                                    }
+                                }
+                            };
+
+                            // 检查 2：如果远端 refs 与本地相同，不更新
+                            if local_refs == repo.refs {
+                                tracing::debug!("Repo {} refs are up-to-date", &repo.repo_id);
+                                continue;
+                            }
+
+                            // 有新的 refs 更新，清空 bundle 等待重新同步
+                            tracing::info!(
+                                "Detected ref updates for repo {} from node {}",
+                                &repo.repo_id,
+                                ra.node_id
+                            );
+
+                            // 删除旧的 bundle 文件
+                            if !local_repo.bundle.as_os_str().is_empty() {
+                                let bundle_path = local_repo.bundle.to_string_lossy().to_string();
+                                match tokio::fs::remove_file(&bundle_path).await {
+                                    Ok(_) => {
+                                        tracing::info!(
+                                            "Deleted outdated bundle for repo {}",
+                                            &repo.repo_id
+                                        );
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Failed to delete bundle file {}: {}",
+                                            bundle_path,
+                                            e
+                                        );
+                                    }
+                                }
+                            }
+
+                            // 清空旧的 refs 并添加最新的 refs
+                            if let Err(e) =
+                                crate::storage::ref_model::delete_refs_for_repo(&repo.repo_id).await
+                            {
+                                tracing::warn!(
+                                    "Failed to delete refs for repo {}: {}",
+                                    &repo.repo_id,
+                                    e
+                                );
+                            }
+
+                            // 添加最新的 refs
+                            if let Err(e) = crate::storage::ref_model::batch_save_refs(
+                                &repo.repo_id,
+                                &repo.refs,
+                            )
+                            .await
+                            {
+                                tracing::warn!(
+                                    "Failed to save new refs for repo {}: {}",
+                                    &repo.repo_id,
+                                    e
+                                );
+                            } else {
+                                tracing::info!(
+                                    "Updated refs for repo {} with {} new refs",
+                                    &repo.repo_id,
+                                    repo.refs.len()
+                                );
+                            }
+
+                            // 更新 repo 表：清空 bundle 字段
+                            if let Err(e) =
+                                crate::storage::repo_model::update_repo_bundle(&repo.repo_id, "")
+                                    .await
+                            {
+                                tracing::warn!(
+                                    "Failed to clear bundle for repo {}: {}",
+                                    &repo.repo_id,
+                                    e
+                                );
+                            }
+
+                            tracing::info!(
+                                "Cleared bundle and refs for repo {}, waiting for automatic sync",
+                                &repo.repo_id
+                            );
+                        }
+                        Ok(None) => {
+                            // Repo 不存在，插入为 external repo
+                            tracing::debug!("Repo {} is new, adding as external", &repo.repo_id);
+                            let mut new_repo = repo.clone();
+                            new_repo.is_external = true;
+                            if let Err(e) =
+                                crate::storage::repo_model::save_repo_to_db(&new_repo).await
+                            {
+                                tracing::warn!(
+                                    "Failed to save remote repo {} to db: {}",
+                                    &repo.repo_id,
+                                    e
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to load repo {}: {}", &repo.repo_id, e);
+                        }
                     }
                 }
             }

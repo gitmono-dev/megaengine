@@ -95,7 +95,9 @@ pub async fn batch_save_refs(
 }
 
 /// Load all refs for a repository
-pub async fn load_refs_for_repo(repo_id: &str) -> Result<std::collections::HashMap<String, String>> {
+pub async fn load_refs_for_repo(
+    repo_id: &str,
+) -> Result<std::collections::HashMap<String, String>> {
     let db = init_db().await?;
 
     let refs = Entity::find()
@@ -211,7 +213,10 @@ mod tests {
         let loaded = load_refs_for_repo(repo_id).await?;
         assert_eq!(loaded.len(), 3);
         assert_eq!(loaded.get("refs/heads/main"), Some(&"abc123".to_string()));
-        assert_eq!(loaded.get("refs/heads/develop"), Some(&"def456".to_string()));
+        assert_eq!(
+            loaded.get("refs/heads/develop"),
+            Some(&"def456".to_string())
+        );
         assert_eq!(loaded.get("refs/tags/v1.0"), Some(&"ghi789".to_string()));
 
         // Cleanup
