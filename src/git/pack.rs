@@ -201,7 +201,7 @@ pub fn pull_repo_from_bundle(repo_path: &str, bundle_path: &str, branch: &str) -
         return Err(anyhow::anyhow!("repository not found: {}", repo_path));
     }
 
-    let _repo = Repository::open(repo_path)
+    Repository::open(repo_path)
         .map_err(|e| anyhow::anyhow!("failed to open git repo: {}", e))?;
 
     // 构建分支引用名称，确保格式正确
