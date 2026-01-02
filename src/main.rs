@@ -345,10 +345,21 @@ async fn main() -> Result<()> {
                     timestamp: timestamp_now(),
                 };
 
-                let repo = repo::repo::Repo::new(repo_id.to_string(), desc, PathBuf::from(path));
+                let mut repo_obj = repo::repo::Repo::new(repo_id.to_string(), desc, PathBuf::from(path.clone()));
+
+                // Read and populate refs from the git repository
+                match megaengine::git::git_repo::read_repo_refs(&path) {
+                    Ok(refs) => {
+                        repo_obj.refs = refs;
+                        tracing::info!("Loaded {} refs from repository", repo_obj.refs.len());
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to read refs from repository: {}", e);
+                    }
+                }
 
                 let mut manager = repo::repo_manager::RepoManager::new();
-                match manager.register_repo(repo).await {
+                match manager.register_repo(repo_obj).await {
                     Ok(_) => tracing::info!("Repo {} added", repo_id),
                     Err(e) => tracing::info!("Failed to add repo: {}", e),
                 }
@@ -418,6 +429,26 @@ async fn main() -> Result<()> {
                                 println!("  Repository: {}", repo.p2p_description.name);
                                 println!("  Creator: {}", repo.p2p_description.creator);
                                 println!("  Description: {}", repo.p2p_description.description);
+
+                                // Read and save refs from the cloned repository
+                                match megaengine::git::git_repo::read_repo_refs(&output) {
+                                    Ok(refs) => {
+                                        tracing::info!("Loaded {} refs from cloned repository", refs.len());
+                                        // Save refs to the database
+                                        match storage::ref_model::batch_save_refs(&repo_id, &refs).await {
+                                            Ok(_) => {
+                                                tracing::info!("Refs saved to database for repository {}", repo_id);
+                                                println!("  Refs: {} branches/tags", refs.len());
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!("Failed to save refs to database: {}", e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("Failed to read refs from cloned repository: {}", e);
+                                    }
+                                }
                             }
                             Err(e) => {
                                 tracing::error!("Failed to clone repository: {}", e);

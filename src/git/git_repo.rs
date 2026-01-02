@@ -34,3 +34,43 @@ pub fn repo_name_space(path: &str) -> String {
     }
     "".to_string()
 }
+
+/// Read all refs (branches and tags) from a git repository
+pub fn read_repo_refs(path: &str) -> Result<std::collections::HashMap<String, String>> {
+    let repo =
+        Repository::open(path).map_err(|e| anyhow::anyhow!("failed to open git repo: {}", e))?;
+
+    let mut refs = std::collections::HashMap::new();
+
+    // Read branches (refs/heads/*)
+    let branches = repo
+        .branches(None)
+        .map_err(|e| anyhow::anyhow!("failed to read branches: {}", e))?;
+
+    for branch_result in branches {
+        let (branch, _) =
+            branch_result.map_err(|e| anyhow::anyhow!("failed to read branch: {}", e))?;
+        if let Ok(name) = branch.name() {
+            if let Some(name) = name {
+                if let Some(oid) = branch.get().target() {
+                    refs.insert(format!("refs/heads/{}", name), oid.to_string());
+                }
+            }
+        }
+    }
+
+    // Read tags (refs/tags/*)
+    let tag_names = repo
+        .tag_names(None)
+        .map_err(|e| anyhow::anyhow!("failed to read tags: {}", e))?;
+
+    for tag_name in tag_names.iter().flatten() {
+        if let Ok(reference) = repo.find_reference(&format!("refs/tags/{}", tag_name)) {
+            if let Some(oid) = reference.target() {
+                refs.insert(format!("refs/tags/{}", tag_name), oid.to_string());
+            }
+        }
+    }
+
+    Ok(refs)
+}

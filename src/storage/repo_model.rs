@@ -15,7 +15,6 @@ pub struct Model {
     pub creator: String,
     pub description: String,
     pub timestamp: i64,
-    pub refs: String,
     pub path: String,
     pub bundle: String,
     pub is_external: bool,
@@ -31,7 +30,6 @@ impl ActiveModelBehavior for ActiveModel {}
 /// 保存或更新 Repo 到数据库
 pub async fn save_repo_to_db(repo: &Repo) -> Result<()> {
     let db = init_db().await?;
-    let refs_json = serde_json::to_string(&repo.refs)?;
     let now = chrono::Local::now().timestamp();
 
     // 查询是否已存在
@@ -45,7 +43,6 @@ pub async fn save_repo_to_db(repo: &Repo) -> Result<()> {
             creator: Set(repo.p2p_description.creator.clone()),
             description: Set(repo.p2p_description.description.clone()),
             timestamp: Set(repo.p2p_description.timestamp),
-            refs: Set(refs_json),
             path: Set(repo.path.to_string_lossy().to_string()),
             bundle: Set(repo.bundle.to_string_lossy().to_string()),
             is_external: Set(repo.is_external),
@@ -61,7 +58,6 @@ pub async fn save_repo_to_db(repo: &Repo) -> Result<()> {
             creator: Set(repo.p2p_description.creator.clone()),
             description: Set(repo.p2p_description.description.clone()),
             timestamp: Set(repo.p2p_description.timestamp),
-            refs: Set(refs_json),
             path: Set(repo.path.to_string_lossy().to_string()),
             bundle: Set(repo.bundle.to_string_lossy().to_string()),
             is_external: Set(repo.is_external),
@@ -70,6 +66,9 @@ pub async fn save_repo_to_db(repo: &Repo) -> Result<()> {
         };
         Entity::insert(active_model).exec(&db).await?;
     }
+
+    // 保存 refs 到 refs 表
+    crate::storage::ref_model::batch_save_refs(&repo.repo_id, &repo.refs).await?;
 
     Ok(())
 }
@@ -80,7 +79,8 @@ pub async fn load_repo_from_db(repo_id: &str) -> Result<Option<Repo>> {
 
     // 使用 find_by_id 直接查询
     if let Some(model) = Entity::find_by_id(repo_id).one(&db).await? {
-        let refs: std::collections::HashMap<String, String> = serde_json::from_str(&model.refs)?;
+        // Load refs from ref_model table
+        let refs = crate::storage::ref_model::load_refs_for_repo(&model.id).await?;
 
         let repo = Repo {
             repo_id: model.id,
@@ -105,6 +105,8 @@ pub async fn load_repo_from_db(repo_id: &str) -> Result<Option<Repo>> {
 pub async fn delete_repo_from_db(repo_id: &str) -> Result<()> {
     let db = init_db().await?;
     Entity::delete_by_id(repo_id).exec(&db).await?;
+    // Delete associated refs
+    crate::storage::ref_model::delete_refs_for_repo(repo_id).await?;
     Ok(())
 }
 
@@ -115,8 +117,8 @@ pub async fn list_repos() -> Result<Vec<Repo>> {
 
     let mut repos = Vec::new();
     for model in models {
-        let refs: std::collections::HashMap<String, String> =
-            serde_json::from_str(&model.refs).unwrap_or_default();
+        // Load refs from ref_model table
+        let refs = crate::storage::ref_model::load_refs_for_repo(&model.id).await?;
 
         repos.push(Repo {
             repo_id: model.id,
@@ -151,7 +153,6 @@ pub async fn update_repo_bundle(repo_id: &str, bundle_path: &str) -> Result<()> 
             creator: Unchanged(model.creator),
             description: Unchanged(model.description),
             timestamp: Unchanged(model.timestamp),
-            refs: Unchanged(model.refs),
             path: Unchanged(model.path),
             is_external: Unchanged(model.is_external),
             created_at: Unchanged(model.created_at),

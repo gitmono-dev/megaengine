@@ -41,10 +41,9 @@ pub fn pack_repo_bundle(repo_path: &str, output_path: &str) -> Result<()> {
     }
 
     // If no branches found, try to get HEAD
-    if branch_refs.is_empty()
-        && repo.head().is_ok() {
-            branch_refs.push("HEAD".to_string());
-        }
+    if branch_refs.is_empty() && repo.head().is_ok() {
+        branch_refs.push("HEAD".to_string());
+    }
 
     if branch_refs.is_empty() {
         return Err(anyhow::anyhow!("no branches found to bundle"));

@@ -1,5 +1,6 @@
 pub mod node_model;
 pub mod repo_model;
+pub mod ref_model;
 
 use anyhow::Result;
 use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseConnection};
@@ -113,7 +114,6 @@ pub async fn init_db() -> Result<DatabaseConnection> {
                         creator TEXT NOT NULL,
                         description TEXT NOT NULL,
                         timestamp INTEGER NOT NULL,
-                        refs TEXT NOT NULL,
                         path TEXT NOT NULL,
                         bundle TEXT NOT NULL DEFAULT '',
                         is_external INTEGER NOT NULL DEFAULT 0,
@@ -134,6 +134,20 @@ pub async fn init_db() -> Result<DatabaseConnection> {
                         version INTEGER NOT NULL,
                         created_at INTEGER NOT NULL,
                         updated_at INTEGER NOT NULL
+                    )",
+                )
+                .await;
+
+            // Refs 表：存储分支和标签的最新 commit
+            let _ = db
+                .execute_unprepared(
+                    "CREATE TABLE IF NOT EXISTS refs (
+                        id TEXT PRIMARY KEY,
+                        repo_id TEXT NOT NULL,
+                        ref_name TEXT NOT NULL,
+                        commit_hash TEXT NOT NULL,
+                        updated_at INTEGER NOT NULL,
+                        UNIQUE(repo_id, ref_name)
                     )",
                 )
                 .await;
