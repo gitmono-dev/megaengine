@@ -119,7 +119,7 @@ Keep this terminal running as well.
 
 **Terminal 3** - Add a repository on node1:
 ```bash
-cargo run -- repo add --path E:\git_test\tiny --description "Tiny"
+cargo run -- repo add --path /path/to/git_test/tiny --description "Tiny"
 ```
 
 The output will display the repo ID. Save this ID for later use.
