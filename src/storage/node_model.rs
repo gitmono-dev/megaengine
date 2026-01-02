@@ -59,29 +59,25 @@ pub async fn save_node_info_to_db(info: &NodeInfo) -> Result<()> {
 pub async fn load_node_info_from_db(node_id: &str) -> Result<Option<NodeInfo>> {
     let db = crate::storage::init_db().await?;
 
-    let models = Entity::find().all(&db).await?;
-    for m in models {
-        if m.id == node_id {
-            let addresses: Vec<SocketAddr> = serde_json::from_str(&m.addresses)?;
-            let node_type = match m.node_type {
-                0 => NodeType::Normal,
-                _ => NodeType::Relay,
-            };
+    if let Some(m) = Entity::find_by_id(node_id).one(&db).await? {
+        let addresses: Vec<SocketAddr> = serde_json::from_str(&m.addresses)?;
+        let node_type = match m.node_type {
+            0 => NodeType::Normal,
+            _ => NodeType::Relay,
+        };
 
-            let info = NodeInfo {
-                node_id: crate::node::node_id::NodeId::from_string(&m.id)
-                    .unwrap_or_else(|_| crate::node::node_id::NodeId::from_string("").unwrap()),
-                alias: m.alias,
-                addresses,
-                node_type,
-                version: m.version as u8,
-            };
-
-            return Ok(Some(info));
-        }
+        let info = NodeInfo {
+            node_id: crate::node::node_id::NodeId::from_string(&m.id)
+                .unwrap_or_else(|_| crate::node::node_id::NodeId::from_string("").unwrap()),
+            alias: m.alias,
+            addresses,
+            node_type,
+            version: m.version as u8,
+        };
+        Ok(Some(info))
+    } else {
+        Ok(None)
     }
-
-    Ok(None)
 }
 
 /// 删除节点记录

@@ -51,13 +51,13 @@ impl RepoId {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct ParseNodeIdError;
+pub struct ParseRepoIdError;
 
 impl FromStr for RepoId {
-    type Err = ParseNodeIdError;
+    type Err = ParseRepoIdError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        RepoId::parse_from_str(s).map_err(|_| ParseNodeIdError)
+        RepoId::parse_from_str(s).map_err(|_| ParseRepoIdError)
     }
 }
 
