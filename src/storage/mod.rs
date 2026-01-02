@@ -147,7 +147,7 @@ pub async fn init_db() -> Result<DatabaseConnection> {
                         ref_name TEXT NOT NULL,
                         commit_hash TEXT NOT NULL,
                         updated_at INTEGER NOT NULL,
-                        UNIQUE(repo_id, ref_name)
+                        UNIQUE(repo_id, ref_name) ON CONFLICT REPLACE
                     )",
                 )
                 .await;
