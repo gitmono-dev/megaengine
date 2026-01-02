@@ -166,9 +166,41 @@ pub async fn handle_repo_pull(repo_id: String) -> Result<()> {
                 return Ok(());
             }
 
+            let path_str = match repo.path.as_os_str().to_str() {
+                Some(s) => s,
+                None => {
+                    tracing::error!(
+                        "Repository {} has a local path that is not valid UTF-8: {}",
+                        repo_id,
+                        repo.path.display()
+                    );
+                    println!(
+                        "Error: Repository {} has a local path that is not valid UTF-8",
+                        repo_id
+                    );
+                    return Ok(());
+                }
+            };
+
+            let bundle_str = match repo.bundle.as_os_str().to_str() {
+                Some(s) => s,
+                None => {
+                    tracing::error!(
+                        "Repository {} has a bundle path that is not valid UTF-8: {}",
+                        repo_id,
+                        repo.bundle.display()
+                    );
+                    println!(
+                        "Error: Repository {} has a bundle path that is not valid UTF-8",
+                        repo_id
+                    );
+                    return Ok(());
+                }
+            };
+
             let result = pull_repo_from_bundle(
-                repo.path.as_os_str().to_str().unwrap(),
-                repo.bundle.as_os_str().to_str().unwrap(),
+                path_str,
+                bundle_str,
                 "master",
             );
 
