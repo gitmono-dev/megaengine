@@ -117,8 +117,7 @@ async fn main() -> Result<()> {
             }
         },
         Commands::Node { action } => {
-            handle_node(root_path, String::new(), String::new(), String::new(), None, action)
-                .await?;
+            handle_node(root_path, action).await?;
         }
         Commands::Repo { action } => {
             handle_repo(action).await?;

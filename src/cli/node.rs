@@ -168,10 +168,7 @@ pub async fn handle_node_id() -> Result<()> {
     Ok(())
 }
 
-pub async fn handle_node(
-    root_path: String,
-    action: crate::NodeAction,
-) -> Result<()> {
+pub async fn handle_node(root_path: String, action: crate::NodeAction) -> Result<()> {
     match action {
         crate::NodeAction::Start {
             alias,
