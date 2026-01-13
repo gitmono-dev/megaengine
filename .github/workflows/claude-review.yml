@@ -1,45 +1,86 @@
-name: Claude Code
+name: Claude Code Review with Progress Tracking
 
 on:
   issue_comment:
     types: [created]
   pull_request_review_comment:
-    types: [created, synchronize, ready_for_review, reopened]
+    types: [created, edited, deleted]
   issues:
     types: [opened, assigned]
   pull_request_review:
     types: [submitted]
+  pull_request_target:
+    types: [opened, synchronize, closed]
 
 permissions:
   contents: read
   pull-requests: write
-  issues: read
+  issues: write
+  actions: write
 
 jobs:
   claude-review-with-tracking:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-      id-token: write
+    
+    # Only run for:
+    # 1. PRs from trusted users (OWNER/MEMBER/COLLABORATOR)
+    # 2. Comments mentioning @claude from trusted users
+    # 3. PR reviews mentioning @claude from trusted users
+    if: |
+          (
+            github.event_name == 'pull_request_target' &&
+            (
+              github.event.pull_request.author_association == 'OWNER' ||
+              github.event.pull_request.author_association == 'MEMBER' ||
+              github.event.pull_request.author_association == 'COLLABORATOR'
+            )
+          ) ||
+          (
+            (github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment') &&
+            contains(github.event.comment.body, '@claude') &&
+            (
+              github.event.comment.author_association == 'OWNER' ||
+              github.event.comment.author_association == 'MEMBER' ||
+              github.event.comment.author_association == 'COLLABORATOR'
+            )
+          ) ||
+          (
+            github.event_name == 'pull_request_review' &&
+            contains(github.event.review.body, '@claude') &&
+            (
+              github.event.review.author_association == 'OWNER' ||
+              github.event.review.author_association == 'MEMBER' ||
+              github.event.review.author_association == 'COLLABORATOR'
+            )
+          )
+
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Checkout PR Branch (for comments)
+        if: ${{ github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment' || github.event_name == 'pull_request_review' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr checkout ${{ github.event.issue.number || github.event.pull_request.number }}
 
       - name: PR Review with Progress Tracking
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
           # Enable progress tracking
           track_progress: true
+          show_full_output: true
 
           # Your custom review instructions
           prompt: |
             REPO: ${{ github.repository }}
-            PR NUMBER: ${{ github.event.pull_request.number }}
 
             Perform a comprehensive code review with the following focus areas:
 
