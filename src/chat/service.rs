@@ -120,10 +120,33 @@ async fn try_send_pending_msg(
     }
 
     if peers.contains(&receiver_node_id) {
-         let _ = mgr.send_gossip_message(receiver_node_id.clone(), data.clone()).await;
+        // Direct send to receiver; propagate any error to the caller.
+        mgr.send_gossip_message(receiver_node_id.clone(), data.clone())
+            .await
+            .map_err(|e| anyhow!("Failed to send gossip message to receiver {}: {}", receiver_node_id, e))?;
     } else {
+        // Broadcast to all peers; require at least one successful send.
+        let mut at_least_one_success = false;
+        let mut last_err: Option<anyhow::Error> = None;
+
         for peer in peers {
-             let _ = mgr.send_gossip_message(peer.clone(), data.clone()).await;
+            match mgr.send_gossip_message(peer.clone(), data.clone()).await {
+                Ok(()) => {
+                    at_least_one_success = true;
+                }
+                Err(e) => {
+                    last_err = Some(anyhow!("Failed to send gossip message to peer {}: {}", peer, e));
+                }
+            }
+        }
+
+        if !at_least_one_success {
+            // If all sends failed, return the last error (or a generic one if none captured).
+            if let Some(err) = last_err {
+                return Err(err);
+            } else {
+                return Err(anyhow!("Failed to send gossip message to any peer (unknown error)"));
+            }
         }
     }
 
