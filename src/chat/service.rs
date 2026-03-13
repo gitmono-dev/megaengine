@@ -36,7 +36,7 @@ async fn process_pending_messages(
         .filter(crate::storage::chat_message::Column::Status.eq(MessageStatus::Sending))
         .all(&db)
         .await?;
-    
+
     for msg in pending_msgs {
         tracing::info!("Processing pending message: {}", msg.id);
 
@@ -44,21 +44,31 @@ async fn process_pending_messages(
             Ok(id) => id,
             Err(_) => {
                 tracing::error!("Invalid receiver node id: {}, marking failed", msg.to);
-                crate::storage::chat_message::update_message_status(&msg.id, MessageStatus::Failed).await?;
+                crate::storage::chat_message::update_message_status(&msg.id, MessageStatus::Failed)
+                    .await?;
                 continue;
             }
         };
 
-        match try_send_pending_msg(manager.clone(), my_node.clone(), receiver_node_id, msg.content.clone(), msg.id.clone()).await {
-             Ok(_) => {
-                 crate::storage::chat_message::update_message_status(&msg.id, MessageStatus::Sent).await?;
-                 tracing::info!("Message {} sent successfully", msg.id);
-             },
-             Err(e) => {
-                 tracing::error!("Failed to send message {}: {}", msg.id, e);
-                 // We can keep it as 'Sending' to retry later, or make a 'Failed' logic
-                 // For now, retry indefinitely
-             }
+        match try_send_pending_msg(
+            manager.clone(),
+            my_node.clone(),
+            receiver_node_id,
+            msg.content.clone(),
+            msg.id.clone(),
+        )
+        .await
+        {
+            Ok(_) => {
+                crate::storage::chat_message::update_message_status(&msg.id, MessageStatus::Sent)
+                    .await?;
+                tracing::info!("Message {} sent successfully", msg.id);
+            }
+            Err(e) => {
+                tracing::error!("Failed to send message {}: {}", msg.id, e);
+                // We can keep it as 'Sending' to retry later, or make a 'Failed' logic
+                // For now, retry indefinitely
+            }
         }
     }
     Ok(())
@@ -72,7 +82,8 @@ async fn try_send_pending_msg(
     msg_id: String,
 ) -> Result<()> {
     // 1. Get Receiver Public Key
-    let receiver_keypair = receiver_node_id.to_keypair()
+    let receiver_keypair = receiver_node_id
+        .to_keypair()
         .map_err(|_| anyhow!("Could not decode receiver NodeId (did:key)"))?;
     let receiver_pk = receiver_keypair.verifying_key;
 
@@ -87,9 +98,9 @@ async fn try_send_pending_msg(
         msg_id: msg_id.clone(),
         ciphertext: encrypted_bytes,
     };
-    
+
     let message = GossipMessage::Chat(encrypted_chat);
-    
+
     // 4. Sign & Broadcast/Send
     let mut signed_msg = SignedMessage {
         node_id: my_node.node_id().clone(),
@@ -123,7 +134,13 @@ async fn try_send_pending_msg(
         // Direct send to receiver; propagate any error to the caller.
         mgr.send_gossip_message(receiver_node_id.clone(), data.clone())
             .await
-            .map_err(|e| anyhow!("Failed to send gossip message to receiver {}: {}", receiver_node_id, e))?;
+            .map_err(|e| {
+                anyhow!(
+                    "Failed to send gossip message to receiver {}: {}",
+                    receiver_node_id,
+                    e
+                )
+            })?;
     } else {
         // Broadcast to all peers; require at least one successful send.
         let mut at_least_one_success = false;
@@ -135,7 +152,11 @@ async fn try_send_pending_msg(
                     at_least_one_success = true;
                 }
                 Err(e) => {
-                    last_err = Some(anyhow!("Failed to send gossip message to peer {}: {}", peer, e));
+                    last_err = Some(anyhow!(
+                        "Failed to send gossip message to peer {}: {}",
+                        peer,
+                        e
+                    ));
                 }
             }
         }
@@ -145,7 +166,9 @@ async fn try_send_pending_msg(
             if let Some(err) = last_err {
                 return Err(err);
             } else {
-                return Err(anyhow!("Failed to send gossip message to any peer (unknown error)"));
+                return Err(anyhow!(
+                    "Failed to send gossip message to any peer (unknown error)"
+                ));
             }
         }
     }
@@ -174,7 +197,7 @@ pub async fn send_chat_message(
         MessageStatus::Sending,
     )
     .await?;
-    
+
     // Maybe trigger one round of processing immediately?
     // For now rely on background task.
     Ok(())
@@ -199,12 +222,16 @@ pub async fn process_incoming_chat(
     let my_keypair = &my_node.keypair;
     let plaintext_bytes = my_keypair.decrypt_message(&msg.ciphertext)?;
     let content = String::from_utf8(plaintext_bytes)?;
-    
+
     tracing::info!("Received Chat from {}: {}", msg.sender_id.0, content);
 
     // 3. Store
     let db = crate::storage::get_db_conn().await.unwrap();
-    if (crate::storage::chat_message::Entity::find_by_id(msg.msg_id.clone()).one(&db).await?).is_none() {
+    if (crate::storage::chat_message::Entity::find_by_id(msg.msg_id.clone())
+        .one(&db)
+        .await?)
+        .is_none()
+    {
         crate::storage::chat_message::save_message(
             msg.msg_id.clone(),
             msg.sender_id.to_string(),
@@ -224,7 +251,7 @@ pub async fn process_incoming_chat(
         timestamp: timestamp_now(),
         signature: "".to_string(),
     };
-    
+
     let ack_sig = my_node.sign_message(msg.msg_id.as_bytes())?;
     let ack_msg = ChatAckMessage {
         signature: hex::encode(ack_sig),
@@ -232,7 +259,7 @@ pub async fn process_incoming_chat(
     };
 
     let gossip_msg = GossipMessage::ChatAck(ack_msg);
-    
+
     let mut signed_ack = SignedMessage {
         node_id: my_node.node_id().clone(),
         message: gossip_msg,
@@ -242,19 +269,19 @@ pub async fn process_incoming_chat(
     let self_hash = signed_ack.self_hash();
     let sign = my_node.sign_message(self_hash.as_slice())?;
     signed_ack.signature = hex::encode(sign);
-    
+
     let envelope = Envelope {
         payload: signed_ack,
         ttl: TTL,
     };
     let data = serde_json::to_vec(&envelope)?;
-    
+
     let mgr = manager.lock().await;
     let peers = mgr.list_peers().await;
     for peer in peers {
-         let _ = mgr.send_gossip_message(peer.clone(), data.clone()).await;
+        let _ = mgr.send_gossip_message(peer.clone(), data.clone()).await;
     }
-    
+
     Ok(())
 }
 
@@ -273,13 +300,9 @@ pub async fn process_ack(
     }
 
     tracing::info!("Received ACK for msg {}", ack.msg_id);
-    
-    crate::storage::chat_message::update_message_status(
-        &ack.msg_id,
-        MessageStatus::Delivered,
-    )
-    .await?;
+
+    crate::storage::chat_message::update_message_status(&ack.msg_id, MessageStatus::Delivered)
+        .await?;
 
     Ok(())
 }
-
