@@ -214,64 +214,70 @@ async fn rebuild_repos_table(db: &DatabaseConnection) -> Result<()> {
         now_expr.to_string()
     };
 
-    let sql = format!(
-        "BEGIN IMMEDIATE;
-         CREATE TABLE repos_new (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            creator TEXT NOT NULL,
-            description TEXT NOT NULL,
-            language TEXT NOT NULL DEFAULT '',
-            size INTEGER NOT NULL DEFAULT 0,
-            latest_commit_at INTEGER NOT NULL DEFAULT 0,
-            path TEXT NOT NULL,
-            bundle TEXT NOT NULL DEFAULT '',
-            is_external INTEGER NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-         );
-         INSERT OR REPLACE INTO repos_new (
-            id,
-            name,
-            creator,
-            description,
-            language,
-            size,
-            latest_commit_at,
-            path,
-            bundle,
-            is_external,
-            created_at,
-            updated_at
-         )
-         SELECT
-            id,
-            name,
-            creator,
-            description,
-            {language_expr},
-            {size_expr},
-            {latest_commit_expr},
-            path,
-            {bundle_expr},
-            {is_external_expr},
-            {created_expr},
-            {updated_expr}
-         FROM repos
-         WHERE id IS NOT NULL
-           AND name IS NOT NULL
-           AND creator IS NOT NULL
-           AND description IS NOT NULL
-           AND path IS NOT NULL;
-         DROP TABLE repos;
-         ALTER TABLE repos_new RENAME TO repos;
-         COMMIT;"
+    let create_sql = "\
+        CREATE TABLE repos_new (\
+            id TEXT PRIMARY KEY,\
+            name TEXT NOT NULL,\
+            creator TEXT NOT NULL,\
+            description TEXT NOT NULL,\
+            language TEXT NOT NULL DEFAULT '',\
+            size INTEGER NOT NULL DEFAULT 0,\
+            latest_commit_at INTEGER NOT NULL DEFAULT 0,\
+            path TEXT NOT NULL,\
+            bundle TEXT NOT NULL DEFAULT '',\
+            is_external INTEGER NOT NULL DEFAULT 0,\
+            created_at INTEGER NOT NULL,\
+            updated_at INTEGER NOT NULL\
+        );";
+
+    let insert_sql = format!(
+        "\
+        INSERT OR REPLACE INTO repos_new (\
+            id,\
+            name,\
+            creator,\
+            description,\
+            language,\
+            size,\
+            latest_commit_at,\
+            path,\
+            bundle,\
+            is_external,\
+            created_at,\
+            updated_at\
+        )\
+        SELECT\
+            id,\
+            name,\
+            creator,\
+            description,\
+            {language_expr},\
+            {size_expr},\
+            {latest_commit_expr},\
+            path,\
+            {bundle_expr},\
+            {is_external_expr},\
+            {created_expr},\
+            {updated_expr}\
+        FROM repos\
+        WHERE id IS NOT NULL\
+          AND name IS NOT NULL\
+          AND creator IS NOT NULL\
+          AND description IS NOT NULL\
+          AND path IS NOT NULL;"
     );
 
-    if let Err(err) = db.execute_unprepared(&sql).await {
-        let _ = db.execute_unprepared("ROLLBACK;").await;
-        return Err(err.into());
-    }
+    let drop_sql = "DROP TABLE repos;";
+    let rename_sql = "ALTER TABLE repos_new RENAME TO repos;";
+
+    let txn = db.begin().await?;
+
+    txn.execute_unprepared(create_sql).await?;
+    txn.execute_unprepared(&insert_sql).await?;
+    txn.execute_unprepared(drop_sql).await?;
+    txn.execute_unprepared(rename_sql).await?;
+
+    txn.commit().await?;
 
     Ok(())
 }
@@ -308,30 +314,49 @@ async fn rebuild_refs_table(db: &DatabaseConnection) -> Result<()> {
         "CAST(strftime('%s','now') AS INTEGER)"
     };
 
-    let sql = format!(
-        "BEGIN IMMEDIATE;
-         CREATE TABLE refs_new (
+    // Execute the migration statements one-by-one within a transaction
+    let txn = db.begin().await?;
+
+    txn.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        "CREATE TABLE refs_new (
             repo_id TEXT NOT NULL,
             ref_name TEXT NOT NULL,
             commit_hash TEXT NOT NULL,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             PRIMARY KEY (repo_id, ref_name)
-         );
-         INSERT OR REPLACE INTO refs_new (repo_id, ref_name, commit_hash, created_at, updated_at)
+        )"
+        .to_owned(),
+    ))
+    .await?;
+
+    let insert_sql = format!(
+        "INSERT OR REPLACE INTO refs_new (repo_id, ref_name, commit_hash, created_at, updated_at)
          SELECT repo_id, ref_name, commit_hash, {created_expr}, {updated_expr}
          FROM refs
-         WHERE repo_id IS NOT NULL AND ref_name IS NOT NULL;
-         DROP TABLE refs;
-         ALTER TABLE refs_new RENAME TO refs;
-         COMMIT;"
+         WHERE repo_id IS NOT NULL AND ref_name IS NOT NULL"
     );
 
-    if let Err(err) = db.execute_unprepared(&sql).await {
-        let rollback = "ROLLBACK;";
-        let _ = db.execute_unprepared(rollback).await;
-        return Err(err.into());
-    }
+    txn.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        insert_sql,
+    ))
+    .await?;
+
+    txn.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        "DROP TABLE refs".to_owned(),
+    ))
+    .await?;
+
+    txn.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        "ALTER TABLE refs_new RENAME TO refs".to_owned(),
+    ))
+    .await?;
+
+    txn.commit().await?;
 
     Ok(())
 }
@@ -416,9 +441,11 @@ async fn ensure_schema(db: &DatabaseConnection) -> Result<()> {
 /// 初始化数据库连接并创建表
 pub async fn get_db_conn() -> Result<DatabaseConnection> {
     use std::collections::HashMap;
+    use std::sync::Arc;
     use tokio::sync::Mutex;
 
-    static DB_POOL: OnceCell<Mutex<HashMap<PathBuf, DatabaseConnection>>> = OnceCell::const_new();
+    static DB_POOL: OnceCell<Mutex<HashMap<PathBuf, Arc<OnceCell<DatabaseConnection>>>>> =
+        OnceCell::const_new();
 
     let pool = DB_POOL
         .get_or_init(|| async { Mutex::new(HashMap::new()) })
@@ -426,40 +453,44 @@ pub async fn get_db_conn() -> Result<DatabaseConnection> {
 
     let path = db_path();
 
-    {
-        let map = pool.lock().await;
-        if let Some(db) = map.get(&path) {
-            return Ok(db.clone());
-        }
-    }
+    // 为每个数据库路径维护一个独立的初始化单元，确保每个路径的初始化只执行一次
+    let cell = {
+        let mut map = pool.lock().await;
+        map.entry(path.clone())
+            .or_insert_with(|| Arc::new(OnceCell::const_new()))
+            .clone()
+    };
 
     // 延迟初始化并缓存全局连接（仅第一次会执行创建表操作）
-    let db_path = path.clone();
+    let db = cell
+        .get_or_try_init(|| {
+            let db_path = path.clone();
+            async move {
+                // 确保目录存在
+                if let Some(parent) = db_path.parent() {
+                    fs::create_dir_all(parent).ok();
+                }
 
-    // 确保目录存在
-    if let Some(parent) = db_path.parent() {
-        fs::create_dir_all(parent).ok();
-    }
+                // 使用合适的 SQLite URL 格式
+                let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
 
-    // 使用合适的 SQLite URL 格式
-    let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
+                let mut opt = ConnectOptions::new(db_url);
+                opt.max_connections(8)
+                    .min_connections(1)
+                    .connect_timeout(Duration::from_secs(8))
+                    .idle_timeout(Duration::from_secs(8))
+                    .sqlx_logging(false);
 
-    let mut opt = ConnectOptions::new(db_url);
-    opt.max_connections(8)
-        .min_connections(1)
-        .connect_timeout(Duration::from_secs(8))
-        .idle_timeout(Duration::from_secs(8))
-        .sqlx_logging(false);
+                let db = Database::connect(opt).await?;
 
-    let db = Database::connect(opt).await?;
+                // 运行迁移/建表，兼容已有数据库结构升级
+                ensure_schema(&db).await?;
 
-    // 运行迁移/建表，兼容已有数据库结构升级
-    ensure_schema(&db).await?;
-
-    {
-        let mut map = pool.lock().await;
-        map.insert(path, db.clone());
-    }
+                Ok::<DatabaseConnection, anyhow::Error>(db)
+            }
+        })
+        .await?
+        .clone();
 
     Ok(db)
 }
