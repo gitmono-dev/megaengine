@@ -170,18 +170,50 @@ fn detect_language(path: &str) -> String {
 
 fn calculate_directory_size(path: &std::path::Path) -> u64 {
     use std::fs;
-    let mut size = 0;
-    if let Ok(entries) = fs::read_dir(path) {
+
+    const MAX_DEPTH: usize = 64;
+    const MAX_ENTRIES: u64 = 200_000;
+    const MAX_TOTAL_SIZE: u64 = 20 * 1024 * 1024 * 1024; // 20 GiB
+
+    fn walk(path: &std::path::Path, depth: usize, entries_seen: &mut u64, total: &mut u64) {
+        if depth > MAX_DEPTH || *entries_seen >= MAX_ENTRIES || *total >= MAX_TOTAL_SIZE {
+            return;
+        }
+
+        let Ok(entries) = fs::read_dir(path) else {
+            return;
+        };
+
         for entry in entries.flatten() {
+            if *entries_seen >= MAX_ENTRIES || *total >= MAX_TOTAL_SIZE {
+                break;
+            }
+
+            *entries_seen += 1;
             let p = entry.path();
-            if p.is_file() {
-                size += fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
-            } else if p.is_dir() {
-                size += calculate_directory_size(&p);
+
+            // Never follow symlinks to avoid cycles and unbounded traversal.
+            let Ok(meta) = fs::symlink_metadata(&p) else {
+                continue;
+            };
+
+            let file_type = meta.file_type();
+            if file_type.is_symlink() {
+                continue;
+            }
+
+            if file_type.is_file() {
+                *total = total.saturating_add(meta.len());
+            } else if file_type.is_dir() {
+                walk(&p, depth + 1, entries_seen, total);
             }
         }
     }
-    size
+
+    let mut entries_seen = 0;
+    let mut total = 0;
+    walk(path, 0, &mut entries_seen, &mut total);
+    total
 }
 
 fn format_bytes(bytes: u64) -> String {

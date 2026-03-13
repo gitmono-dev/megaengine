@@ -65,19 +65,37 @@ async fn test_bundle_transfer_between_two_nodes() {
         .with_test_writer()
         .try_init();
 
+    let cert_dir = std::env::current_dir()
+        .unwrap()
+        .join("tmp/bundle_two_nodes_certs");
+    fs::remove_dir_all(&cert_dir).ok();
+    fs::create_dir_all(&cert_dir).expect("Failed to create test cert directory");
+
+    let sender_cert_path = cert_dir.join("cert_sender.pem").to_string_lossy().to_string();
+    let sender_key_path = cert_dir.join("key_sender.pem").to_string_lossy().to_string();
+    let receiver_cert_path = cert_dir
+        .join("cert_receiver.pem")
+        .to_string_lossy()
+        .to_string();
+    let receiver_key_path = cert_dir
+        .join("key_receiver.pem")
+        .to_string_lossy()
+        .to_string();
+    let ca_cert_path = cert_dir.join("ca-cert.pem").to_string_lossy().to_string();
+
     println!("📋 Step 1: Setting up certificates");
     // Ensure certificates exist
     megaengine::transport::cert::ensure_certificates(
-        "cert/cert_sender.pem",
-        "cert/key_sender.pem",
-        "cert/ca-cert.pem",
+        &sender_cert_path,
+        &sender_key_path,
+        &ca_cert_path,
     )
     .expect("Failed to ensure sender certificates");
 
     megaengine::transport::cert::ensure_certificates(
-        "cert/cert_receiver.pem",
-        "cert/key_receiver.pem",
-        "cert/ca-cert.pem",
+        &receiver_cert_path,
+        &receiver_key_path,
+        &ca_cert_path,
     )
     .expect("Failed to ensure receiver certificates");
 
@@ -116,15 +134,15 @@ async fn test_bundle_transfer_between_two_nodes() {
     // Start QUIC servers
     let sender_config = QuicConfig::new(
         sender_addr,
-        "cert/cert_sender.pem".to_string(),
-        "cert/key_sender.pem".to_string(),
-        "cert/ca-cert.pem".to_string(),
+        sender_cert_path.clone(),
+        sender_key_path.clone(),
+        ca_cert_path.clone(),
     );
     let receiver_config = QuicConfig::new(
         receiver_addr,
-        "cert/cert_receiver.pem".to_string(),
-        "cert/key_receiver.pem".to_string(),
-        "cert/ca-cert.pem".to_string(),
+        receiver_cert_path.clone(),
+        receiver_key_path.clone(),
+        ca_cert_path.clone(),
     );
 
     sender_node
@@ -368,6 +386,7 @@ async fn test_bundle_transfer_between_two_nodes() {
         fs::remove_dir_all(&sender_bundle_storage).ok();
         fs::remove_dir_all(&receiver_bundle_storage).ok();
         fs::remove_file(&bundle_path).ok();
+        fs::remove_dir_all(&cert_dir).ok();
         println!("✅ Cleanup completed");
 
         println!("\n========================================");
@@ -404,6 +423,7 @@ async fn test_bundle_transfer_between_two_nodes() {
         fs::remove_dir_all(&sender_bundle_storage).ok();
         fs::remove_dir_all(&receiver_bundle_storage).ok();
         fs::remove_file(&bundle_path).ok();
+        fs::remove_dir_all(&cert_dir).ok();
 
         panic!("Bundle reception failed");
     }
@@ -416,9 +436,6 @@ async fn test_bundle_transfer_between_two_nodes() {
         megaengine::storage::node_model::delete_node_from_db(&receiver_node.node_id().to_string())
             .await;
 
-    // 清理生成的证书文件
-    let _ = std::fs::remove_file("cert/cert_sender.pem");
-    let _ = std::fs::remove_file("cert/key_sender.pem");
-    let _ = std::fs::remove_file("cert/cert_receiver.pem");
-    let _ = std::fs::remove_file("cert/key_receiver.pem");
+    // 清理生成的证书目录（包含 CA 文件）
+    fs::remove_dir_all(&cert_dir).ok();
 }

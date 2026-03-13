@@ -55,9 +55,11 @@ pub async fn run_chat_command(cmd: ChatCommand) -> Result<()> {
 
             println!("--- Chat History ---");
             for m in messages {
-                let time = chrono::DateTime::from_timestamp(m.created_at, 0)
-                    .unwrap_or_default()
-                    .format("%Y-%m-%d %H:%M:%S");
+                let time = if let Some(dt) = chrono::DateTime::from_timestamp(m.created_at, 0) {
+                    dt.format("%Y-%m-%d %H:%M:%S").to_string()
+                } else {
+                    m.created_at.to_string()
+                };
                 println!(
                     "[{}] From: {} To: {} : {} ({:?})",
                     time, m.from, m.to, m.content, m.status

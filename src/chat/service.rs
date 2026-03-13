@@ -226,7 +226,7 @@ pub async fn process_incoming_chat(
     tracing::info!("Received Chat from {}: {}", msg.sender_id.0, content);
 
     // 3. Store
-    let db = crate::storage::get_db_conn().await.unwrap();
+    let db = crate::storage::get_db_conn().await?;
     if (crate::storage::chat_message::Entity::find_by_id(msg.msg_id.clone())
         .one(&db)
         .await?)

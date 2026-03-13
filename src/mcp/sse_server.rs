@@ -59,7 +59,6 @@ pub async fn start_sse_server(addr: SocketAddr) -> anyhow::Result<()> {
     let app = Router::new()
         .route("/sse", get(sse_handler))
         .route("/messages", post(message_handler))
-        .layer(CorsLayer::permissive())
         .with_state(state);
 
     tracing::info!("MCP SSE Server listening on {}", addr);
@@ -156,18 +155,10 @@ async fn message_handler(
                             if let Some(name) = name {
                                 match RepoMcpServer::execute_tool(name, args).await {
                                     Ok(result_value) => {
-                                        // Format result as MCP CallToolResult with text content
-                                        let content_text = result_value.to_string();
                                         Some(json!({
                                             "jsonrpc": "2.0",
                                             "id": request.get("id"),
-                                            "result": {
-                                                "content": [{
-                                                    "type": "text",
-                                                    "text": content_text
-                                                }],
-                                                "isError": false
-                                            }
+                                            "result": result_value
                                         }))
                                     }
                                     Err(e) => Some(json!({

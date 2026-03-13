@@ -142,6 +142,137 @@ async fn migrate_repos_table(db: &DatabaseConnection) -> Result<()> {
         "ALTER TABLE repos ADD COLUMN latest_commit_at INTEGER NOT NULL DEFAULT 0",
     )
     .await?;
+
+    if repos_table_needs_rebuild(db).await? {
+        rebuild_repos_table(db).await?;
+    }
+
+    Ok(())
+}
+
+async fn repos_table_needs_rebuild(db: &DatabaseConnection) -> Result<bool> {
+    // Legacy schema had a `timestamp` column that can block inserts now that
+    // repo writes no longer set it. Rebuild to canonical schema when present.
+    sqlite_has_column(db, "repos", "timestamp").await
+}
+
+async fn rebuild_repos_table(db: &DatabaseConnection) -> Result<()> {
+    let has_language = sqlite_has_column(db, "repos", "language").await?;
+    let has_size = sqlite_has_column(db, "repos", "size").await?;
+    let has_latest_commit_at = sqlite_has_column(db, "repos", "latest_commit_at").await?;
+    let has_bundle = sqlite_has_column(db, "repos", "bundle").await?;
+    let has_is_external = sqlite_has_column(db, "repos", "is_external").await?;
+    let has_created_at = sqlite_has_column(db, "repos", "created_at").await?;
+    let has_updated_at = sqlite_has_column(db, "repos", "updated_at").await?;
+    let has_timestamp = sqlite_has_column(db, "repos", "timestamp").await?;
+
+    let now_expr = "CAST(strftime('%s','now') AS INTEGER)";
+
+    let language_expr = if has_language {
+        "COALESCE(language, '')"
+    } else {
+        "''"
+    };
+
+    let size_expr = if has_size { "COALESCE(size, 0)" } else { "0" };
+
+    let latest_commit_expr = if has_latest_commit_at {
+        "COALESCE(latest_commit_at, 0)"
+    } else if has_timestamp {
+        "COALESCE(timestamp, 0)"
+    } else {
+        "0"
+    };
+
+    let bundle_expr = if has_bundle {
+        "COALESCE(bundle, '')"
+    } else {
+        "''"
+    };
+
+    let is_external_expr = if has_is_external {
+        "COALESCE(is_external, 0)"
+    } else {
+        "0"
+    };
+
+    let created_expr = if has_created_at {
+        format!("COALESCE(created_at, {now_expr})")
+    } else if has_timestamp {
+        format!("COALESCE(timestamp, {now_expr})")
+    } else {
+        now_expr.to_string()
+    };
+
+    let updated_expr = if has_updated_at {
+        format!("COALESCE(updated_at, {now_expr})")
+    } else if has_created_at {
+        format!("COALESCE(created_at, {now_expr})")
+    } else if has_timestamp {
+        format!("COALESCE(timestamp, {now_expr})")
+    } else {
+        now_expr.to_string()
+    };
+
+    let sql = format!(
+        "BEGIN IMMEDIATE;
+         CREATE TABLE repos_new (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            creator TEXT NOT NULL,
+            description TEXT NOT NULL,
+            language TEXT NOT NULL DEFAULT '',
+            size INTEGER NOT NULL DEFAULT 0,
+            latest_commit_at INTEGER NOT NULL DEFAULT 0,
+            path TEXT NOT NULL,
+            bundle TEXT NOT NULL DEFAULT '',
+            is_external INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+         );
+         INSERT OR REPLACE INTO repos_new (
+            id,
+            name,
+            creator,
+            description,
+            language,
+            size,
+            latest_commit_at,
+            path,
+            bundle,
+            is_external,
+            created_at,
+            updated_at
+         )
+         SELECT
+            id,
+            name,
+            creator,
+            description,
+            {language_expr},
+            {size_expr},
+            {latest_commit_expr},
+            path,
+            {bundle_expr},
+            {is_external_expr},
+            {created_expr},
+            {updated_expr}
+         FROM repos
+         WHERE id IS NOT NULL
+           AND name IS NOT NULL
+           AND creator IS NOT NULL
+           AND description IS NOT NULL
+           AND path IS NOT NULL;
+         DROP TABLE repos;
+         ALTER TABLE repos_new RENAME TO repos;
+         COMMIT;"
+    );
+
+    if let Err(err) = db.execute_unprepared(&sql).await {
+        let _ = db.execute_unprepared("ROLLBACK;").await;
+        return Err(err.into());
+    }
+
     Ok(())
 }
 

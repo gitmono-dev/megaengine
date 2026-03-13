@@ -163,4 +163,6 @@ async fn test_gossip_three_nodes_message_relay() {
     let _ = std::fs::remove_file("cert/key2.pem");
     let _ = std::fs::remove_file("cert/cert3.pem");
     let _ = std::fs::remove_file("cert/key3.pem");
+    let _ = std::fs::remove_file("cert/ca-cert.pem");
+    let _ = std::fs::remove_file("cert/ca-cert-key.pem");
 }
