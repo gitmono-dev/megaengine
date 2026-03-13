@@ -99,6 +99,12 @@ enum RepoAction {
         #[arg(long)]
         repo_id: String,
     },
+    /// Update repository from bundle (like git pull)
+    Pull {
+        /// Repository ID
+        #[arg(long)]
+        repo_id: String,
+    },
     Clone {
         #[arg(long)]
         output: String,
@@ -115,6 +121,7 @@ async fn main() -> Result<()> {
     // 初始化 tracing 日志
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("error,megaengine=debug"));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("error,megaengine=debug"));
 
     tracing_subscriber::fmt()
         .with_env_filter(env_filter)
@@ -125,6 +132,7 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
+    let root_path = resolve_root_path(&cli.root)?;
     let root_path = resolve_root_path(&cli.root)?;
 
     match cli.command {

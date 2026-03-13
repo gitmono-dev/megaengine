@@ -76,6 +76,9 @@ pub async fn save_repo_to_db(repo: &Repo) -> Result<()> {
     // 保存 refs 到 refs 表
     crate::storage::ref_model::batch_save_refs(&repo.repo_id, &repo.refs).await?;
 
+    // 保存 refs 到 refs 表
+    crate::storage::ref_model::batch_save_refs(&repo.repo_id, &repo.refs).await?;
+
     Ok(())
 }
 
@@ -85,6 +88,8 @@ pub async fn load_repo_from_db(repo_id: &str) -> Result<Option<Repo>> {
 
     // 使用 find_by_id 直接查询
     if let Some(model) = Entity::find_by_id(repo_id).one(&db).await? {
+        // Load refs from ref_model table
+        let refs = crate::storage::ref_model::load_refs_for_repo(&model.id).await?;
         // Load refs from ref_model table
         let refs = crate::storage::ref_model::load_refs_for_repo(&model.id).await?;
 
@@ -115,6 +120,8 @@ pub async fn delete_repo_from_db(repo_id: &str) -> Result<()> {
     Entity::delete_by_id(repo_id).exec(&db).await?;
     // Delete associated refs
     crate::storage::ref_model::delete_refs_for_repo(repo_id).await?;
+    // Delete associated refs
+    crate::storage::ref_model::delete_refs_for_repo(repo_id).await?;
     Ok(())
 }
 
@@ -125,6 +132,8 @@ pub async fn list_repos() -> Result<Vec<Repo>> {
 
     let mut repos = Vec::new();
     for model in models {
+        // Load refs from ref_model table
+        let refs = crate::storage::ref_model::load_refs_for_repo(&model.id).await?;
         // Load refs from ref_model table
         let refs = crate::storage::ref_model::load_refs_for_repo(&model.id).await?;
 
