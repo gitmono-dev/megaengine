@@ -1,7 +1,6 @@
 pub mod chat_message;
 pub mod node_model;
 pub mod ref_model;
-pub mod ref_model;
 pub mod repo_model;
 
 use anyhow::Result;

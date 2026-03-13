@@ -80,7 +80,6 @@ async fn test_gossip_three_nodes_message_relay() {
     node3.start_quic_server(config3).await.unwrap();
 
     // 5. 启动 gossip 和 bundle 服务
-    let bundle_storage = std::path::PathBuf::from("./data/test_bundles");
     let gossip1 = Arc::new(GossipService::new(
         Arc::clone(node1.connection_manager.as_ref().unwrap()),
         node1.clone(),

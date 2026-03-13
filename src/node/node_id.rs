@@ -124,7 +124,7 @@ mod tests {
     #[test]
     fn test_valid_from_string() -> Result<()> {
         let node_id_str = "did:key:z2DXbAovGq5vNKpXVFyrhVLppMdUCmV1hCNjbUydLMEWasE";
-        let node_id = NodeId::from_string(&node_id_str)?;
+        let node_id = NodeId::from_string(node_id_str)?;
         assert_eq!(node_id.0, node_id_str);
         Ok(())
     }

@@ -122,11 +122,9 @@ fn detect_language(path: &str) -> String {
                     if stack.len() < 50 {
                         stack.push(path);
                     }
-                } else {
-                    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-                        *ext_counts.entry(ext.to_lowercase()).or_insert(0) += 1;
-                        files_scanned += 1;
-                    }
+                } else if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                    *ext_counts.entry(ext.to_lowercase()).or_insert(0) += 1;
+                    files_scanned += 1;
                 }
             }
         }

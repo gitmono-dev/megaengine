@@ -190,7 +190,7 @@ fn test_pack_repo_bundle() {
     // Check that main branch exists
     let output = Command::new("git")
         .current_dir(repo2_str)
-        .args(&["branch", "-a"])
+        .args(["branch", "-a"])
         .output()
         .expect("Failed to list branches");
     let branches = String::from_utf8_lossy(&output.stdout);
@@ -213,7 +213,7 @@ fn test_pack_repo_bundle() {
     // Check commit history
     let output = Command::new("git")
         .current_dir(repo2_str)
-        .args(&["log", "--oneline"])
+        .args(["log", "--oneline"])
         .output()
         .expect("Failed to get log");
     let log = String::from_utf8_lossy(&output.stdout);
@@ -226,7 +226,7 @@ fn test_pack_repo_bundle() {
     // Check tags
     let output = Command::new("git")
         .current_dir(repo2_str)
-        .args(&["tag"])
+        .args(["tag"])
         .output()
         .expect("Failed to list tags");
     let tags = String::from_utf8_lossy(&output.stdout);

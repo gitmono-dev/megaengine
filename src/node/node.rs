@@ -227,12 +227,12 @@ mod tests {
 
         // Test expiration logic
         std::thread::sleep(Duration::from_secs(2)); // Sleep for 2 seconds to test expiration
-        assert_eq!(node_routing.expired(), false); // Not expired if TTL is 24 hours
+        assert!(!node_routing.expired()); // Not expired if TTL is 24 hours
 
         // Manually expire the node and check
         node_routing.ttl = Duration::from_secs(1); // Set TTL to 1 second
         std::thread::sleep(Duration::from_secs(2)); // Sleep for 2 seconds to make the node expire
-        assert_eq!(node_routing.expired(), true); // Should be expired now
+        assert!(node_routing.expired()); // Should be expired now
     }
 
     // Test the `NodeType` enum

@@ -271,14 +271,14 @@ async fn test_bundle_transfer_between_two_nodes() {
     // 提取最后一段（NodeId 格式是 "did:key:xxx"）
     let last_segment = sender_node_id_str
         .split(':')
-        .last()
+        .next_back()
         .unwrap_or(&sender_node_id_str);
-    let encoded_sender_id = last_segment.replace(':', "_").replace('/', "_");
+    let encoded_sender_id = last_segment.replace([':', '/'], "_");
 
     // repo_id 会被处理为最后一段（用 : 分割）
     let repo_id_last_part = "test_transfer_repo"
         .split(':')
-        .last()
+        .next_back()
         .unwrap_or("test_transfer_repo")
         .to_string();
 
@@ -332,7 +332,7 @@ async fn test_bundle_transfer_between_two_nodes() {
                     // Check commit history
                     let output = Command::new("git")
                         .current_dir(restored_repo_path.to_str().unwrap())
-                        .args(&["log", "--oneline"])
+                        .args(["log", "--oneline"])
                         .output()
                         .expect("Failed to get git log");
 
@@ -388,10 +388,8 @@ async fn test_bundle_transfer_between_two_nodes() {
         if receiver_bundle_storage.exists() {
             println!("   - Contents of receiver storage:");
             if let Ok(entries) = fs::read_dir(&receiver_bundle_storage) {
-                for entry in entries {
-                    if let Ok(entry) = entry {
-                        println!("     - {}", entry.path().display());
-                    }
+                for entry in entries.flatten() {
+                    println!("     - {}", entry.path().display());
                 }
             }
         }

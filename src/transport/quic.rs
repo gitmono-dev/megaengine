@@ -384,10 +384,15 @@ mod tests {
         identity::keypair::KeyPair,
         node::node::{Node, NodeType},
     };
-    use std::sync::Once;
+    use std::sync::{Once, OnceLock};
     use tokio::time::Duration;
 
     static RUSTLS_INIT: Once = Once::new();
+    static TEST_SERIAL_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+    fn serial_lock() -> &'static tokio::sync::Mutex<()> {
+        TEST_SERIAL_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    }
 
     fn init() {
         // Install ring crypto provider only once per test process.
@@ -493,6 +498,7 @@ mod tests {
     // Test the `server` method
     #[tokio::test]
     async fn test_server_creation() {
+        let _guard = serial_lock().lock().await;
         init();
         cleanup_test_certs();
         let config = mock_quic_config();
@@ -509,6 +515,7 @@ mod tests {
     // Test the `connect` method
     #[tokio::test]
     async fn test_client_connection() {
+        let _guard = serial_lock().lock().await;
         init();
         cleanup_test_certs();
         let keypair1 = KeyPair::generate().expect("generate keypair");
@@ -569,6 +576,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_message() {
+        let _guard = serial_lock().lock().await;
         init();
         cleanup_test_certs();
         let keypair1 = KeyPair::generate().expect("generate keypair");
@@ -632,6 +640,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_connection_without_shared_ca() {
+        let _guard = serial_lock().lock().await;
         init();
         cleanup_test_certs();
         let keypair1 = KeyPair::generate().expect("generate keypair");

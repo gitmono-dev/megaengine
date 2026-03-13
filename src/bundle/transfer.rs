@@ -304,6 +304,7 @@ impl BundleTransferManager {
         let mut file = fs::OpenOptions::new()
             .create(true)
             .write(true)
+            .truncate(false)
             .open(&file_path)
             .await
             .context("Failed to open bundle file")?;

@@ -85,8 +85,8 @@ impl KeyPair {
 
         // 5. Derive Encryption Key (Hash)
         let mut hasher = Sha256::new();
-        hasher.update(&shared_secret_bytes);
-        hasher.update(&ephemeral_pk_bytes);
+        hasher.update(shared_secret_bytes);
+        hasher.update(ephemeral_pk_bytes);
         hasher.update(recipient_mont_point.to_bytes());
         let key_hash = hasher.finalize();
 
@@ -104,7 +104,7 @@ impl KeyPair {
         // 7. Pack: EphemeralPK (32) + Nonce (12) + Ciphertext
         let mut result = Vec::with_capacity(32 + 12 + ciphertext.len());
         result.extend_from_slice(&ephemeral_pk_bytes);
-        result.extend_from_slice(&nonce);
+        result.extend_from_slice(nonce);
         result.extend_from_slice(&ciphertext);
 
         Ok(result)
@@ -153,7 +153,7 @@ impl KeyPair {
         let my_mont_point = my_ed_point.to_montgomery();
 
         let mut hasher = Sha256::new();
-        hasher.update(&shared_secret_bytes);
+        hasher.update(shared_secret_bytes);
         hasher.update(ephemeral_pk_bytes);
         hasher.update(my_mont_point.to_bytes());
         let key_hash = hasher.finalize();
@@ -211,7 +211,7 @@ mod tests {
     #[test]
     fn test_export_and_import_verifying_key() {
         let kp1 = KeyPair::generate().unwrap();
-        let vk_bytes = kp1.verifying_key.as_bytes().clone();
+        let vk_bytes = *kp1.verifying_key.as_bytes();
         let kp2 = KeyPair::from_verifying_key_bytes(vk_bytes).unwrap();
 
         let msg = b"verify test";

@@ -32,7 +32,7 @@ pub async fn save_ref(repo_id: &str, ref_name: &str, commit_hash: &str) -> Resul
     // Check if ref already exists
     let existing = Entity::find_by_id(id.clone()).one(&db).await?;
 
-    if let Some(_) = existing {
+    if existing.is_some() {
         // Update existing ref
         let active_model = ActiveModel {
             id: Unchanged(id),
@@ -70,7 +70,7 @@ pub async fn batch_save_refs(
 
         let existing = Entity::find_by_id(id.clone()).one(&db).await?;
 
-        if let Some(_) = existing {
+        if existing.is_some() {
             let active_model = ActiveModel {
                 id: Unchanged(id),
                 repo_id: Unchanged(repo_id.to_string()),
