@@ -2,17 +2,18 @@ use anyhow::Result;
 use sea_orm::entity::prelude::*;
 use sea_orm::{Set, Unchanged};
 
-use crate::storage::init_db;
+use crate::storage::get_db_conn;
 
 /// Refs table entity for tracking branch and tag commits
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "refs")]
 pub struct Model {
-    #[sea_orm(primary_key)]
-    pub id: String,
+    #[sea_orm(primary_key, auto_increment = false)]
     pub repo_id: String,
+    #[sea_orm(primary_key, auto_increment = false)]
     pub ref_name: String,
     pub commit_hash: String,
+    pub created_at: i64,
     pub updated_at: i64,
 }
 
@@ -23,32 +24,33 @@ impl ActiveModelBehavior for ActiveModel {}
 
 /// Save or update a ref in the database
 pub async fn save_ref(repo_id: &str, ref_name: &str, commit_hash: &str) -> Result<()> {
-    let db = init_db().await?;
+    let db = get_db_conn().await?;
     let now = chrono::Local::now().timestamp();
 
-    // Generate a unique ID for this ref record (repo_id + ref_name)
-    let id = format!("{}:{}", repo_id, ref_name);
-
     // Check if ref already exists
-    let existing = Entity::find_by_id(id.clone()).one(&db).await?;
+    let existing = Entity::find()
+        .filter(Column::RepoId.eq(repo_id))
+        .filter(Column::RefName.eq(ref_name))
+        .one(&db)
+        .await?;
 
-    if let Some(_) = existing {
+    if let Some(existing_model) = existing {
         // Update existing ref
         let active_model = ActiveModel {
-            id: Unchanged(id),
-            repo_id: Unchanged(repo_id.to_string()),
-            ref_name: Unchanged(ref_name.to_string()),
+            repo_id: Unchanged(existing_model.repo_id),
+            ref_name: Unchanged(existing_model.ref_name),
             commit_hash: Set(commit_hash.to_string()),
+            created_at: Unchanged(existing_model.created_at),
             updated_at: Set(now),
         };
         Entity::update(active_model).exec(&db).await?;
     } else {
         // Insert new ref
         let active_model = ActiveModel {
-            id: Set(id),
             repo_id: Set(repo_id.to_string()),
             ref_name: Set(ref_name.to_string()),
             commit_hash: Set(commit_hash.to_string()),
+            created_at: Set(now),
             updated_at: Set(now),
         };
         Entity::insert(active_model).exec(&db).await?;
@@ -62,29 +64,31 @@ pub async fn batch_save_refs(
     repo_id: &str,
     refs: &std::collections::HashMap<String, String>,
 ) -> Result<()> {
-    let db = init_db().await?;
+    let db = get_db_conn().await?;
     let now = chrono::Local::now().timestamp();
 
     for (ref_name, commit_hash) in refs {
-        let id = format!("{}:{}", repo_id, ref_name);
+        let existing = Entity::find()
+            .filter(Column::RepoId.eq(repo_id))
+            .filter(Column::RefName.eq(ref_name.as_str()))
+            .one(&db)
+            .await?;
 
-        let existing = Entity::find_by_id(id.clone()).one(&db).await?;
-
-        if let Some(_) = existing {
+        if let Some(existing_model) = existing {
             let active_model = ActiveModel {
-                id: Unchanged(id),
-                repo_id: Unchanged(repo_id.to_string()),
-                ref_name: Unchanged(ref_name.clone()),
+                repo_id: Unchanged(existing_model.repo_id),
+                ref_name: Unchanged(existing_model.ref_name),
                 commit_hash: Set(commit_hash.clone()),
+                created_at: Unchanged(existing_model.created_at),
                 updated_at: Set(now),
             };
             Entity::update(active_model).exec(&db).await?;
         } else {
             let active_model = ActiveModel {
-                id: Set(id),
                 repo_id: Set(repo_id.to_string()),
                 ref_name: Set(ref_name.clone()),
                 commit_hash: Set(commit_hash.clone()),
+                created_at: Set(now),
                 updated_at: Set(now),
             };
             Entity::insert(active_model).exec(&db).await?;
@@ -98,7 +102,7 @@ pub async fn batch_save_refs(
 pub async fn load_refs_for_repo(
     repo_id: &str,
 ) -> Result<std::collections::HashMap<String, String>> {
-    let db = init_db().await?;
+    let db = get_db_conn().await?;
 
     let refs = Entity::find()
         .filter(Column::RepoId.eq(repo_id))
@@ -115,10 +119,14 @@ pub async fn load_refs_for_repo(
 
 /// Get a specific ref by repo_id and ref_name
 pub async fn get_ref(repo_id: &str, ref_name: &str) -> Result<Option<String>> {
-    let db = init_db().await?;
-    let id = format!("{}:{}", repo_id, ref_name);
+    let db = get_db_conn().await?;
 
-    if let Some(model) = Entity::find_by_id(id).one(&db).await? {
+    if let Some(model) = Entity::find()
+        .filter(Column::RepoId.eq(repo_id))
+        .filter(Column::RefName.eq(ref_name))
+        .one(&db)
+        .await?
+    {
         return Ok(Some(model.commit_hash));
     }
 
@@ -127,7 +135,7 @@ pub async fn get_ref(repo_id: &str, ref_name: &str) -> Result<Option<String>> {
 
 /// Delete all refs for a repository
 pub async fn delete_refs_for_repo(repo_id: &str) -> Result<()> {
-    let db = init_db().await?;
+    let db = get_db_conn().await?;
     Entity::delete_many()
         .filter(Column::RepoId.eq(repo_id))
         .exec(&db)
@@ -137,9 +145,12 @@ pub async fn delete_refs_for_repo(repo_id: &str) -> Result<()> {
 
 /// Delete a specific ref
 pub async fn delete_ref(repo_id: &str, ref_name: &str) -> Result<()> {
-    let db = init_db().await?;
-    let id = format!("{}:{}", repo_id, ref_name);
-    Entity::delete_by_id(id).exec(&db).await?;
+    let db = get_db_conn().await?;
+    Entity::delete_many()
+        .filter(Column::RepoId.eq(repo_id))
+        .filter(Column::RefName.eq(ref_name))
+        .exec(&db)
+        .await?;
     Ok(())
 }
 
@@ -148,7 +159,7 @@ pub async fn has_refs_changed(
     repo_id: &str,
     old_refs: &std::collections::HashMap<String, String>,
 ) -> Result<bool> {
-    let db = init_db().await?;
+    let db = get_db_conn().await?;
 
     let current_refs = Entity::find()
         .filter(Column::RepoId.eq(repo_id))

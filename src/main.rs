@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 
 mod cli;
 use cli::{handle_auth, handle_node, handle_repo};
+use megaengine::mcp::start_mcp_server;
 
 #[derive(Parser)]
 #[command(name = "megaengine")]
@@ -33,6 +34,13 @@ enum Commands {
         #[command(subcommand)]
         action: RepoAction,
     },
+    /// Chat P2P commands
+    Chat {
+        #[command(subcommand)]
+        action: crate::cli::chat::ChatCommand,
+    },
+    /// Start MCP server (Stdio mode)
+    Mcp,
 }
 
 #[derive(Subcommand)]
@@ -58,6 +66,14 @@ enum NodeAction {
         /// Bootstrap node address to connect to on startup (e.g., 127.0.0.1:9000)
         #[arg(long)]
         bootstrap_node: Option<String>,
+
+        /// Deprecated for node start: stdio MCP must run as a separate process via `megaengine mcp`
+        #[arg(long, default_value = "false")]
+        mcp: bool,
+
+        /// Start MCP SSE server on the specified port (e.g., 3001)
+        #[arg(long)]
+        mcp_sse_port: Option<u16>,
     },
     /// Print node id using stored keypair
     Id,
@@ -104,6 +120,7 @@ async fn main() -> Result<()> {
         .with_env_filter(env_filter)
         .with_target(true)
         .with_level(true)
+        .with_writer(std::io::stderr)
         .init();
 
     let cli = Cli::parse();
@@ -121,6 +138,12 @@ async fn main() -> Result<()> {
         }
         Commands::Repo { action } => {
             handle_repo(action).await?;
+        }
+        Commands::Chat { action } => {
+            crate::cli::handle_chat(action).await?;
+        }
+        Commands::Mcp => {
+            start_mcp_server().await?;
         }
     }
 

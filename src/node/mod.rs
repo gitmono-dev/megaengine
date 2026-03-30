@@ -2,4 +2,3 @@
 pub mod node;
 pub mod node_addr;
 pub mod node_id;
-pub mod node_manager;

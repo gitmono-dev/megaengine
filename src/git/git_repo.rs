@@ -1,5 +1,5 @@
 use anyhow::Result;
-use git2::{Repository, Sort};
+use git2::{BranchType, Repository, Sort};
 
 pub fn repo_root_commit_bytes(path: &str) -> Result<Vec<u8>> {
     let repo =
@@ -42,19 +42,18 @@ pub fn read_repo_refs(path: &str) -> Result<std::collections::HashMap<String, St
 
     let mut refs = std::collections::HashMap::new();
 
-    // Read branches (refs/heads/*)
+    // Read local branches (refs/heads/*)
     let branches = repo
-        .branches(None)
+        .branches(Some(BranchType::Local))
         .map_err(|e| anyhow::anyhow!("failed to read branches: {}", e))?;
 
     for branch_result in branches {
-        let (branch, _) =
+        let (branch, _branch_type) =
             branch_result.map_err(|e| anyhow::anyhow!("failed to read branch: {}", e))?;
-        if let Ok(name) = branch.name() {
-            if let Some(name) = name {
-                if let Some(oid) = branch.get().target() {
-                    refs.insert(format!("refs/heads/{}", name), oid.to_string());
-                }
+        if let Ok(Some(name)) = branch.name() {
+            if let Some(oid) = branch.get().target() {
+                let ref_name = format!("refs/heads/{}", name);
+                refs.insert(ref_name, oid.to_string());
             }
         }
     }
@@ -73,4 +72,16 @@ pub fn read_repo_refs(path: &str) -> Result<std::collections::HashMap<String, St
     }
 
     Ok(refs)
+}
+
+pub fn get_latest_commit_time(path: &str) -> Result<i64> {
+    let repo =
+        Repository::open(path).map_err(|e| anyhow::anyhow!("failed to open git repo: {}", e))?;
+    let head = repo
+        .head()
+        .map_err(|e| anyhow::anyhow!("failed to get HEAD: {}", e))?;
+    let commit = head
+        .peel_to_commit()
+        .map_err(|e| anyhow::anyhow!("failed to peel to commit: {}", e))?;
+    Ok(commit.time().seconds())
 }

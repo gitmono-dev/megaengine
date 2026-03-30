@@ -19,6 +19,33 @@ pub enum GossipMessage {
     NodeAnnouncement(NodeAnnouncement),
     /// 仓库公告 (库存公告)
     RepoAnnouncement(RepoAnnouncement),
+    /// P2P 聊天消息
+    Chat(EncryptedChatMessage),
+    /// 聊天消息送达确认
+    ChatAck(ChatAckMessage),
+}
+
+/// 聊天消息 (加密)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EncryptedChatMessage {
+    /// 真正的发送者
+    pub sender_id: NodeId,
+    /// 目标接收者
+    pub receiver_id: NodeId,
+    /// 消息 ID (用于去重)
+    pub msg_id: String,
+    /// 密文数据 (包含 ephemeral public key)
+    pub ciphertext: Vec<u8>,
+}
+
+/// 聊天回执
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatAckMessage {
+    pub sender_id: NodeId,
+    pub target_id: NodeId,
+    pub msg_id: String,
+    pub timestamp: i64,
+    pub signature: String,
 }
 
 /// 节点公告
@@ -29,6 +56,12 @@ pub struct NodeAnnouncement {
     pub alias: String,
     pub node_type: NodeType,
     pub addresses: Vec<SocketAddr>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Envelope {
+    pub payload: SignedMessage,
+    pub ttl: u8,
 }
 
 impl From<Node> for NodeAnnouncement {
@@ -60,7 +93,6 @@ pub struct SignedMessage {
     pub signature: String,
 }
 
-#[allow(dead_code)]
 impl SignedMessage {
     pub fn new_node_sign_message(node: Node) -> Result<Self> {
         let message = GossipMessage::NodeAnnouncement(node.clone().into());
@@ -105,9 +137,33 @@ impl SignedMessage {
         Ok(sign_message)
     }
 
+    fn canonicalize_value(value: serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(map) => {
+                // Sort object keys to obtain a deterministic representation.
+                let mut entries: Vec<(String, serde_json::Value)> = map.into_iter().collect();
+                entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+                let mut new_map = serde_json::Map::new();
+                for (k, v) in entries {
+                    new_map.insert(k, Self::canonicalize_value(v));
+                }
+                serde_json::Value::Object(new_map)
+            }
+            serde_json::Value::Array(vec) => {
+                serde_json::Value::Array(vec.into_iter().map(Self::canonicalize_value).collect())
+            }
+            other => other,
+        }
+    }
+
     pub fn self_hash(&self) -> Vec<u8> {
         let mut hasher = Sha256::new();
-        let message_bytes = serde_json::to_vec(&self.message).unwrap_or_default();
+        // Canonicalize JSON by recursively sorting object keys before serialization.
+        let message_value =
+            serde_json::to_value(&self.message).unwrap_or(serde_json::Value::Null);
+        let canonical_value = Self::canonicalize_value(message_value);
+        let message_bytes = serde_json::to_vec(&canonical_value).unwrap_or_default();
 
         hasher.update(self.node_id.0.as_bytes());
         hasher.update(&message_bytes);
@@ -132,6 +188,8 @@ impl GossipMessage {
         match self {
             GossipMessage::NodeAnnouncement(_) => "node_announcement",
             GossipMessage::RepoAnnouncement(_) => "inventory_announcement",
+            GossipMessage::Chat(_) => "chat",
+            GossipMessage::ChatAck(_ack) => "chat_ack",
         }
     }
 
@@ -140,6 +198,8 @@ impl GossipMessage {
         match self {
             GossipMessage::NodeAnnouncement(na) => &na.node_id,
             GossipMessage::RepoAnnouncement(ra) => &ra.node_id,
+            GossipMessage::Chat(c) => &c.sender_id,
+            GossipMessage::ChatAck(ack) => &ack.sender_id,
         }
     }
 }
@@ -199,7 +259,9 @@ mod tests {
             creator: "did:key:test".to_string(),
             name: "test-repo".to_string(),
             description: "A test repository".to_string(),
-            timestamp: 1000,
+            language: "Rust".to_string(),
+            latest_commit_at: 1000,
+            size: 0,
         };
 
         let repo = Repo::new(

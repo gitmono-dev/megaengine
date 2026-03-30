@@ -5,11 +5,15 @@ use crate::util::get_node_id_last_part;
 use crate::util::get_repo_id_last_part;
 use anyhow::Context;
 use anyhow::Result;
+use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
+
+const TRANSFER_CHUNK_SIZE: usize = 64 * 1024; // 64KB per chunk
 
 /// Bundle 消息类型（用于多帧传输）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -98,8 +102,7 @@ impl BundleTransferManager {
             .context("Failed to send START message")?;
 
         // 2. 分块发送数据
-        const CHUNK_SIZE: usize = 64 * 1024; // 64KB per chunk
-        for (chunk_idx, chunk) in bundle_data.chunks(CHUNK_SIZE).enumerate() {
+        for (chunk_idx, chunk) in bundle_data.chunks(TRANSFER_CHUNK_SIZE).enumerate() {
             let chunk_msg = BundleMessageType::Chunk {
                 repo_id: repo_id.clone(),
                 chunk_idx: chunk_idx as u32,
@@ -133,7 +136,7 @@ impl BundleTransferManager {
             "Bundle {} sent successfully to node {} ({} chunks)",
             file_name,
             target_node_id,
-            bundle_data.chunks(CHUNK_SIZE).count()
+            bundle_data.chunks(TRANSFER_CHUNK_SIZE).count()
         );
 
         Ok(())
@@ -261,6 +264,14 @@ impl BundleTransferManager {
             .await
             .context("Failed to create bundle storage directory")?;
 
+        // 确保文件从头开始：如果存在则清空，如果不存在则创建
+        let encoded_repo_id = get_repo_id_last_part(repo_id);
+        let file_path = dir.join(format!("{}.bundle", encoded_repo_id));
+
+        let _ = fs::File::create(&file_path)
+            .await
+            .context("Failed to create/truncate bundle file")?;
+
         info!(
             "Bundle transfer START from {}: repo={}, file={}, size={} bytes",
             from, repo_id, file_name, total_size
@@ -282,22 +293,35 @@ impl BundleTransferManager {
         let encoded_repo_id = get_repo_id_last_part(repo_id);
         let file_path = dir.join(format!("{}.bundle", encoded_repo_id));
 
-        // 追加写入到文件
+        // 如果文件不存在（可能是 Start 消息丢失），先创建
+        if !file_path.exists() {
+            if let Some(parent) = file_path.parent() {
+                fs::create_dir_all(parent).await?;
+            }
+        }
+
+        // 使用 Write 模式打开，不追加，而是使用 Seek
         let mut file = fs::OpenOptions::new()
             .create(true)
-            .append(true)
+            .write(true)
+            .truncate(false)
             .open(&file_path)
             .await
-            .context("Failed to open bundle file for appending")?;
+            .context("Failed to open bundle file")?;
 
-        use tokio::io::AsyncWriteExt;
+        let offset = (chunk_idx as u64) * (TRANSFER_CHUNK_SIZE as u64);
+        file.seek(SeekFrom::Start(offset))
+            .await
+            .context("Failed to seek to chunk position")?;
+
         file.write_all(&data)
             .await
             .context("Failed to write chunk data")?;
 
         info!(
-            "Received chunk {} ({} bytes) for repo {} from {}",
+            "Received chunk {} (offset {}) ({} bytes) for repo {} from {}",
             chunk_idx,
+            offset,
             data.len(),
             repo_id,
             from

@@ -97,7 +97,9 @@ mod tests {
             creator: "did:key:test".to_string(),
             name: "test-repo".to_string(),
             description: "A test repository".to_string(),
-            timestamp: 1000,
+            language: "Rust".to_string(),
+            latest_commit_at: 2000,
+            size: 0,
         };
 
         let repo = Repo::new(repo_id.to_string(), desc, PathBuf::from("/tmp/test-repo"));
@@ -135,7 +137,10 @@ mod tests {
             creator: "did:key:test".to_string(),
             name: "test-repo-persist".to_string(),
             description: "A test repository with persistence".to_string(),
-            timestamp: 2000,
+            language: "Rust".to_string(),
+
+            latest_commit_at: 2000,
+            size: 0,
         };
 
         let repo = Repo::new(

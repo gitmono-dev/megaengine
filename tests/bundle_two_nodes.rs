@@ -65,19 +65,43 @@ async fn test_bundle_transfer_between_two_nodes() {
         .with_test_writer()
         .try_init();
 
+    let cert_dir = std::env::current_dir()
+        .unwrap()
+        .join("tmp/bundle_two_nodes_certs");
+    fs::remove_dir_all(&cert_dir).ok();
+    fs::create_dir_all(&cert_dir).expect("Failed to create test cert directory");
+
+    let sender_cert_path = cert_dir
+        .join("cert_sender.pem")
+        .to_string_lossy()
+        .to_string();
+    let sender_key_path = cert_dir
+        .join("key_sender.pem")
+        .to_string_lossy()
+        .to_string();
+    let receiver_cert_path = cert_dir
+        .join("cert_receiver.pem")
+        .to_string_lossy()
+        .to_string();
+    let receiver_key_path = cert_dir
+        .join("key_receiver.pem")
+        .to_string_lossy()
+        .to_string();
+    let ca_cert_path = cert_dir.join("ca-cert.pem").to_string_lossy().to_string();
+
     println!("📋 Step 1: Setting up certificates");
     // Ensure certificates exist
     megaengine::transport::cert::ensure_certificates(
-        "cert/cert_sender.pem",
-        "cert/key_sender.pem",
-        "cert/ca-cert.pem",
+        &sender_cert_path,
+        &sender_key_path,
+        &ca_cert_path,
     )
     .expect("Failed to ensure sender certificates");
 
     megaengine::transport::cert::ensure_certificates(
-        "cert/cert_receiver.pem",
-        "cert/key_receiver.pem",
-        "cert/ca-cert.pem",
+        &receiver_cert_path,
+        &receiver_key_path,
+        &ca_cert_path,
     )
     .expect("Failed to ensure receiver certificates");
 
@@ -116,15 +140,15 @@ async fn test_bundle_transfer_between_two_nodes() {
     // Start QUIC servers
     let sender_config = QuicConfig::new(
         sender_addr,
-        "cert/cert_sender.pem".to_string(),
-        "cert/key_sender.pem".to_string(),
-        "cert/ca-cert.pem".to_string(),
+        sender_cert_path.clone(),
+        sender_key_path.clone(),
+        ca_cert_path.clone(),
     );
     let receiver_config = QuicConfig::new(
         receiver_addr,
-        "cert/cert_receiver.pem".to_string(),
-        "cert/key_receiver.pem".to_string(),
-        "cert/ca-cert.pem".to_string(),
+        receiver_cert_path.clone(),
+        receiver_key_path.clone(),
+        ca_cert_path.clone(),
     );
 
     sender_node
@@ -271,14 +295,14 @@ async fn test_bundle_transfer_between_two_nodes() {
     // 提取最后一段（NodeId 格式是 "did:key:xxx"）
     let last_segment = sender_node_id_str
         .split(':')
-        .last()
+        .next_back()
         .unwrap_or(&sender_node_id_str);
-    let encoded_sender_id = last_segment.replace(':', "_").replace('/', "_");
+    let encoded_sender_id = last_segment.replace([':', '/'], "_");
 
     // repo_id 会被处理为最后一段（用 : 分割）
     let repo_id_last_part = "test_transfer_repo"
         .split(':')
-        .last()
+        .next_back()
         .unwrap_or("test_transfer_repo")
         .to_string();
 
@@ -332,7 +356,7 @@ async fn test_bundle_transfer_between_two_nodes() {
                     // Check commit history
                     let output = Command::new("git")
                         .current_dir(restored_repo_path.to_str().unwrap())
-                        .args(&["log", "--oneline"])
+                        .args(["log", "--oneline"])
                         .output()
                         .expect("Failed to get git log");
 
@@ -368,6 +392,7 @@ async fn test_bundle_transfer_between_two_nodes() {
         fs::remove_dir_all(&sender_bundle_storage).ok();
         fs::remove_dir_all(&receiver_bundle_storage).ok();
         fs::remove_file(&bundle_path).ok();
+        fs::remove_dir_all(&cert_dir).ok();
         println!("✅ Cleanup completed");
 
         println!("\n========================================");
@@ -388,10 +413,8 @@ async fn test_bundle_transfer_between_two_nodes() {
         if receiver_bundle_storage.exists() {
             println!("   - Contents of receiver storage:");
             if let Ok(entries) = fs::read_dir(&receiver_bundle_storage) {
-                for entry in entries {
-                    if let Ok(entry) = entry {
-                        println!("     - {}", entry.path().display());
-                    }
+                for entry in entries.flatten() {
+                    println!("     - {}", entry.path().display());
                 }
             }
         }
@@ -406,6 +429,7 @@ async fn test_bundle_transfer_between_two_nodes() {
         fs::remove_dir_all(&sender_bundle_storage).ok();
         fs::remove_dir_all(&receiver_bundle_storage).ok();
         fs::remove_file(&bundle_path).ok();
+        fs::remove_dir_all(&cert_dir).ok();
 
         panic!("Bundle reception failed");
     }
@@ -417,4 +441,7 @@ async fn test_bundle_transfer_between_two_nodes() {
     let _ =
         megaengine::storage::node_model::delete_node_from_db(&receiver_node.node_id().to_string())
             .await;
+
+    // 清理生成的证书目录（包含 CA 文件）
+    fs::remove_dir_all(&cert_dir).ok();
 }

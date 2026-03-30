@@ -47,11 +47,12 @@ impl rustls::client::danger::ServerCertVerifier for NoServerCertificateVerificat
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        vec![
-            rustls::SignatureScheme::RSA_PKCS1_SHA256,
-            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            rustls::SignatureScheme::ED25519,
-        ]
+        let provider = rustls::crypto::CryptoProvider::get_default()
+            .cloned()
+            .unwrap_or(Arc::new(rustls::crypto::ring::default_provider()));
+        provider
+            .signature_verification_algorithms
+            .supported_schemes()
     }
 }
 
@@ -116,7 +117,14 @@ impl QuicConfig {
 
         client_crypto.alpn_protocols = ALPN_QUIC_HTTP.iter().map(|&x| x.into()).collect();
         client_crypto.enable_early_data = false;
-        let client_config = ClientConfig::new(Arc::new(QuicClientConfig::try_from(client_crypto)?));
+        let mut client_config =
+            ClientConfig::new(Arc::new(QuicClientConfig::try_from(client_crypto)?));
+
+        let mut transport_config = TransportConfig::default();
+        transport_config.max_idle_timeout(Some(IdleTimeout::from(VarInt::from_u32(300_000))));
+        transport_config.keep_alive_interval(Some(Duration::from_secs(30)));
+        client_config.transport_config(Arc::new(transport_config));
+
         Ok(client_config)
     }
 

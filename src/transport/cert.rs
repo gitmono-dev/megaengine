@@ -1,10 +1,41 @@
 use anyhow::{anyhow, Result};
-use rcgen::{Certificate, CertificateParams, DistinguishedName, DnType, KeyPair};
+use libvault::utils::cert::Certificate;
+use openssl::pkey::{PKey, Private};
+use openssl::x509::X509;
 use std::fs;
 use std::path::Path;
+use std::time::{Duration, SystemTime};
+
+fn build_ca_certificate() -> Result<libvault::utils::cert::CertBundle> {
+    let mut ca = Certificate {
+        is_ca: true,
+        key_type: "rsa".to_string(),
+        key_bits: 2048,
+        not_after: SystemTime::now() + Duration::from_secs(60 * 60 * 24 * 3650),
+        ..Default::default()
+    };
+
+    ca.to_cert_bundle(None, None)
+        .map_err(|e| anyhow!("Failed to generate CA certificate: {}", e))
+}
+
+fn build_server_certificate(ca_cert: &X509, ca_key: &PKey<Private>) -> Result<libvault::utils::cert::CertBundle> {
+    let mut cert = Certificate {
+        dns_sans: vec!["localhost".to_string()],
+        ip_sans: vec!["127.0.0.1".to_string(), "0.0.0.0".to_string()],
+        is_ca: false,
+        key_type: "rsa".to_string(),
+        key_bits: 2048,
+        not_after: SystemTime::now() + Duration::from_secs(60 * 60 * 24 * 3650),
+        ..Default::default()
+    };
+
+    cert.to_cert_bundle(Some(ca_cert), Some(ca_key))
+        .map_err(|e| anyhow!("Failed to generate server certificate: {}", e))
+}
 
 /// Generate a CA certificate and save to files.
-pub fn generate_ca_cert(ca_cert_path: &str, ca_key_path: &str) -> Result<Certificate> {
+pub fn generate_ca_cert(ca_cert_path: &str, ca_key_path: &str) -> Result<()> {
     // Check if CA certificate already exists
     if Path::new(ca_cert_path).exists() && Path::new(ca_key_path).exists() {
         tracing::info!(
@@ -12,9 +43,7 @@ pub fn generate_ca_cert(ca_cert_path: &str, ca_key_path: &str) -> Result<Certifi
             ca_cert_path,
             ca_key_path
         );
-        // Return a dummy cert since we can't reconstruct it from PEM
-        // But files exist so they'll be used by other functions
-        return Err(anyhow!("CA cert exists, but cannot reconstruct from PEM"));
+        return Ok(());
     }
 
     // Create cert directory if needed
@@ -26,46 +55,26 @@ pub fn generate_ca_cert(ca_cert_path: &str, ca_key_path: &str) -> Result<Certifi
 
     tracing::info!("Generating CA certificate...");
 
-    // Generate a keypair for CA
-    let keypair =
-        KeyPair::generate().map_err(|e| anyhow!("Failed to generate CA keypair: {}", e))?;
-
-    // Create CA certificate parameters
-    let mut params = CertificateParams::new(vec![])
-        .map_err(|e| anyhow!("Failed to create CA certificate params: {}", e))?;
-
-    params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-
-    // Set CA subject name
-    let mut dn = DistinguishedName::new();
-    dn.push(DnType::CommonName, "MegaEngine CA");
-    dn.push(DnType::OrganizationName, "MegaEngine");
-    dn.push(DnType::CountryName, "CN");
-    params.distinguished_name = dn;
-
-    // Generate self-signed CA certificate
-    let ca_cert = params
-        .self_signed(&keypair)
-        .map_err(|e| anyhow!("Failed to generate CA certificate: {}", e))?;
+    let ca_cert = build_ca_certificate()?;
 
     // Save CA certificate
-    let ca_cert_pem = ca_cert.pem();
+    let ca_cert_pem = ca_cert.certificate.to_pem()?;
     fs::write(ca_cert_path, ca_cert_pem)?;
     tracing::info!("CA certificate written to {}", ca_cert_path);
 
     // Save CA private key
-    let ca_key_pem = keypair.serialize_pem();
+    let ca_key_pem = ca_cert.private_key.private_key_to_pem_pkcs8()?;
     fs::write(ca_key_path, ca_key_pem)?;
     tracing::info!("CA private key written to {}", ca_key_path);
 
-    Ok(ca_cert)
+    Ok(())
 }
 
 /// Generate a server certificate signed by CA.
 pub fn generate_server_cert(
     cert_path: &str,
     key_path: &str,
-    ca_cert_obj: &Certificate,
+    ca_cert_obj: &X509,
     ca_key_path: &str,
 ) -> Result<()> {
     // Check if certificate already exists
@@ -88,44 +97,21 @@ pub fn generate_server_cert(
     tracing::info!("Generating server certificate signed by CA...");
 
     // Read CA key
-    let ca_key_pem = fs::read_to_string(ca_key_path)?;
+    let ca_key_pem = fs::read(ca_key_path)?;
 
     // Parse CA key
-    let ca_keypair =
-        KeyPair::from_pem(&ca_key_pem).map_err(|e| anyhow!("Failed to parse CA key: {}", e))?;
+    let ca_key = PKey::private_key_from_pem(&ca_key_pem)
+        .map_err(|e| anyhow!("Failed to parse CA key: {}", e))?;
 
-    // Generate server keypair
-    let server_keypair =
-        KeyPair::generate().map_err(|e| anyhow!("Failed to generate server keypair: {}", e))?;
-
-    // Create server certificate parameters with SANs
-    let mut params = CertificateParams::new(vec![
-        "localhost".to_string(),
-        "127.0.0.1".to_string(),
-        "0.0.0.0".to_string(),
-    ])
-    .map_err(|e| anyhow!("Failed to create server certificate params: {}", e))?;
-
-    // Set server subject name
-    let mut dn = DistinguishedName::new();
-    dn.push(DnType::CommonName, "localhost");
-    dn.push(DnType::OrganizationName, "MegaEngine");
-    dn.push(DnType::CountryName, "CN");
-    params.distinguished_name = dn;
-
-    // Sign server certificate with CA key
-    // signed_by expects (server_keypair, ca_cert_obj, ca_keypair)
-    let server_cert = params
-        .signed_by(&server_keypair, ca_cert_obj, &ca_keypair)
-        .map_err(|e| anyhow!("Failed to generate server certificate: {}", e))?;
+    let server_cert = build_server_certificate(ca_cert_obj, &ca_key)?;
 
     // Save server certificate
-    let cert_pem = server_cert.pem();
+    let cert_pem = server_cert.certificate.to_pem()?;
     fs::write(cert_path, cert_pem)?;
     tracing::info!("Server certificate written to {}", cert_path);
 
     // Save server private key
-    let key_pem = server_keypair.serialize_pem();
+    let key_pem = server_cert.private_key.private_key_to_pem_pkcs8()?;
     fs::write(key_path, key_pem)?;
     tracing::info!("Server private key written to {}", key_path);
 
@@ -148,24 +134,10 @@ pub fn ensure_certificates(cert_path: &str, key_path: &str, ca_cert_path: &str) 
     }
 
     // Generate CA certificate if needed (only once)
-    let ca_cert = match generate_ca_cert(ca_cert_path, &ca_key_path) {
-        Ok(cert) => cert,
-        Err(_) => {
-            // CA already exists - need to reconstruct it from files for signing
-            tracing::info!("CA certificate exists, reconstructing from files");
+    generate_ca_cert(ca_cert_path, &ca_key_path)?;
 
-            let ca_key_pem = fs::read_to_string(&ca_key_path)?;
-            let keypair = KeyPair::from_pem(&ca_key_pem)?;
-            let mut params = CertificateParams::new(vec![])?;
-            params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-            let mut dn = DistinguishedName::new();
-            dn.push(DnType::CommonName, "MegaEngine CA");
-            dn.push(DnType::OrganizationName, "MegaEngine");
-            dn.push(DnType::CountryName, "CN");
-            params.distinguished_name = dn;
-            params.self_signed(&keypair)?
-        }
-    };
+    let ca_cert_pem = fs::read(ca_cert_path)?;
+    let ca_cert = X509::from_pem(&ca_cert_pem).map_err(|e| anyhow!("Failed to parse CA cert: {}", e))?;
 
     // Generate server certificate signed by CA
     // If server cert and key don't both exist, regenerate them
@@ -174,4 +146,124 @@ pub fn ensure_certificates(cert_path: &str, key_path: &str, ca_cert_path: &str) 
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_dir(prefix: &str) -> std::path::PathBuf {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("megaengine-{}-{}", prefix, ts))
+    }
+
+    #[test]
+    fn test_ensure_certificates_generates_files() {
+        let dir = test_dir("cert-generate");
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+
+        let cert_path = dir.join("cert.pem");
+        let key_path = dir.join("key.pem");
+        let ca_cert_path = dir.join("ca-cert.pem");
+        let ca_key_path = dir.join("ca-cert-key.pem");
+
+        let result = ensure_certificates(
+            cert_path.to_str().expect("cert path utf8"),
+            key_path.to_str().expect("key path utf8"),
+            ca_cert_path.to_str().expect("ca cert path utf8"),
+        );
+
+        assert!(result.is_ok());
+        assert!(cert_path.exists());
+        assert!(key_path.exists());
+        assert!(ca_cert_path.exists());
+        assert!(ca_key_path.exists());
+
+        let cert_pem = std::fs::read(&cert_path).expect("read cert pem");
+        let key_pem = std::fs::read(&key_path).expect("read key pem");
+        let ca_cert_pem = std::fs::read(&ca_cert_path).expect("read ca cert pem");
+
+        assert!(X509::from_pem(&cert_pem).is_ok());
+        assert!(PKey::private_key_from_pem(&key_pem).is_ok());
+        assert!(X509::from_pem(&ca_cert_pem).is_ok());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_ensure_certificates_is_idempotent_when_files_exist() {
+        let dir = test_dir("cert-idempotent");
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+
+        let cert_path = dir.join("cert.pem");
+        let key_path = dir.join("key.pem");
+        let ca_cert_path = dir.join("ca-cert.pem");
+
+        ensure_certificates(
+            cert_path.to_str().expect("cert path utf8"),
+            key_path.to_str().expect("key path utf8"),
+            ca_cert_path.to_str().expect("ca cert path utf8"),
+        )
+        .expect("first ensure");
+
+        let cert_before = std::fs::read(&cert_path).expect("read cert before");
+        let key_before = std::fs::read(&key_path).expect("read key before");
+
+        ensure_certificates(
+            cert_path.to_str().expect("cert path utf8"),
+            key_path.to_str().expect("key path utf8"),
+            ca_cert_path.to_str().expect("ca cert path utf8"),
+        )
+        .expect("second ensure");
+
+        let cert_after = std::fs::read(&cert_path).expect("read cert after");
+        let key_after = std::fs::read(&key_path).expect("read key after");
+
+        assert_eq!(cert_before, cert_after);
+        assert_eq!(key_before, key_after);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_ensure_certificates_recovers_from_missing_key() {
+        let dir = test_dir("cert-recover");
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+
+        let cert_path = dir.join("cert.pem");
+        let key_path = dir.join("key.pem");
+        let ca_cert_path = dir.join("ca-cert.pem");
+
+        ensure_certificates(
+            cert_path.to_str().expect("cert path utf8"),
+            key_path.to_str().expect("key path utf8"),
+            ca_cert_path.to_str().expect("ca cert path utf8"),
+        )
+        .expect("first ensure");
+
+        std::fs::remove_file(&key_path).expect("remove key file");
+        assert!(cert_path.exists());
+        assert!(!key_path.exists());
+
+        ensure_certificates(
+            cert_path.to_str().expect("cert path utf8"),
+            key_path.to_str().expect("key path utf8"),
+            ca_cert_path.to_str().expect("ca cert path utf8"),
+        )
+        .expect("recovery ensure");
+
+        assert!(cert_path.exists());
+        assert!(key_path.exists());
+
+        let cert_pem = std::fs::read(&cert_path).expect("read cert pem");
+        let key_pem = std::fs::read(&key_path).expect("read key pem");
+        assert!(X509::from_pem(&cert_pem).is_ok());
+        assert!(PKey::private_key_from_pem(&key_pem).is_ok());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

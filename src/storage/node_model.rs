@@ -26,7 +26,7 @@ impl ActiveModelBehavior for ActiveModel {}
 
 /// 将 NodeInfo 保存到数据库
 pub async fn save_node_info_to_db(info: &NodeInfo) -> Result<()> {
-    let db = crate::storage::init_db().await?;
+    let db = crate::storage::get_db_conn().await?;
 
     let addresses_json = serde_json::to_string(&info.addresses)?;
     let now = chrono::Local::now().timestamp();
@@ -57,7 +57,7 @@ pub async fn save_node_info_to_db(info: &NodeInfo) -> Result<()> {
 
 /// 从数据库加载 NodeInfo
 pub async fn load_node_info_from_db(node_id: &str) -> Result<Option<NodeInfo>> {
-    let db = crate::storage::init_db().await?;
+    let db = crate::storage::get_db_conn().await?;
 
     if let Some(m) = Entity::find_by_id(node_id).one(&db).await? {
         let addresses: Vec<SocketAddr> = serde_json::from_str(&m.addresses)?;
@@ -82,14 +82,14 @@ pub async fn load_node_info_from_db(node_id: &str) -> Result<Option<NodeInfo>> {
 
 /// 删除节点记录
 pub async fn delete_node_from_db(node_id: &str) -> Result<()> {
-    let db = crate::storage::init_db().await?;
+    let db = crate::storage::get_db_conn().await?;
     Entity::delete_by_id(node_id).exec(&db).await?;
     Ok(())
 }
 
 /// 列出所有节点
 pub async fn list_nodes() -> Result<Vec<NodeInfo>> {
-    let db = crate::storage::init_db().await?;
+    let db = crate::storage::get_db_conn().await?;
     let models = Entity::find().all(&db).await?;
 
     let mut out = Vec::new();

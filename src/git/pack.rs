@@ -112,6 +112,9 @@ pub async fn restore_repo_from_bundle(bundle_path: &str, output_path: &str) -> R
 
     tokio::task::spawn_blocking(move || {
         // 使用 git clone 从 bundle 恢复仓库
+        // 注意：从 bundle 克隆时，git clone 可能不会自动 checkout 到 HEAD，
+        // 特别是当 bundle 包含多个 heads 时。
+        // 所以我们需要显式 clone，然后如果目录为空，尝试 checkout。
         let output = Command::new("git")
             .arg("clone")
             .arg(&bundle_path)
@@ -123,6 +126,23 @@ pub async fn restore_repo_from_bundle(bundle_path: &str, output_path: &str) -> R
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(anyhow::anyhow!("git clone from bundle failed: {}", stderr));
         }
+
+        // 尝试自动检出分支 (clone bundle 有时不会自动检出工作区)
+        // 尝试常见分支名，忽略错误（可能分支不存在）
+        let _ = Command::new("git")
+            .current_dir(&output_path)
+            .args(["checkout", "main"])
+            .output();
+        let _ = Command::new("git")
+            .current_dir(&output_path)
+            .args(["checkout", "master"])
+            .output();
+
+        // 强制重置工作区到当前 HEAD，确保文件被检出
+        let _ = Command::new("git")
+            .current_dir(&output_path)
+            .args(["reset", "--hard", "HEAD"])
+            .output();
 
         Ok(())
     })
@@ -201,8 +221,7 @@ pub fn pull_repo_from_bundle(repo_path: &str, bundle_path: &str, branch: &str) -
         return Err(anyhow::anyhow!("repository not found: {}", repo_path));
     }
 
-    Repository::open(repo_path)
-        .map_err(|e| anyhow::anyhow!("failed to open git repo: {}", e))?;
+    Repository::open(repo_path).map_err(|e| anyhow::anyhow!("failed to open git repo: {}", e))?;
 
     // 构建分支引用名称，确保格式正确
     let _ref_spec = if branch.starts_with("refs/") {

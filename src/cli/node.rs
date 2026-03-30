@@ -1,4 +1,5 @@
 use anyhow::Result;
+use megaengine::mcp::start_sse_server;
 use megaengine::{
     bundle::BundleService, node::node_addr::NodeAddr, storage, transport::config::QuicConfig,
 };
@@ -11,6 +12,8 @@ pub async fn handle_node_start(
     addr: String,
     cert_path: String,
     bootstrap_node: Option<String>,
+    enable_mcp: bool,
+    mcp_sse_port: Option<u16>,
 ) -> Result<()> {
     tracing::info!("Starting node...");
     let cert_dir = format!("{}/{}", root_path, cert_path);
@@ -81,6 +84,14 @@ pub async fn handle_node_start(
         // 启动 Repo 同步后台任务
         megaengine::repo::start_repo_sync_task().await;
         tracing::info!("Repo sync task started");
+
+        // Start Chat Sender Task
+        let chat_node = node.clone();
+        let chat_mgr = Arc::clone(conn_mgr);
+        tokio::spawn(async move {
+            let _ = megaengine::chat::service::start_chat_sender_task(chat_mgr, chat_node).await;
+        });
+        tracing::info!("Chat sender task started");
     } else {
         tracing::warn!("No connection manager found, services not started");
     }
@@ -100,6 +111,26 @@ pub async fn handle_node_start(
     let node_addr = NodeAddr::new(node.node_id().clone(), addr.parse()?);
     println!("Node address: {}", node_addr);
     println!("Press Ctrl+C to stop");
+
+    if enable_mcp {
+        tracing::warn!(
+            "--mcp (stdio) is ignored during node start to avoid stdin/stdout contention; use `megaengine mcp` in a separate process"
+        );
+        eprintln!(
+            "Warning: --mcp (stdio) is not started with `node start`. Run `megaengine mcp` in a separate process."
+        );
+    }
+
+    if let Some(port) = mcp_sse_port {
+        tracing::info!("MCP SSE server enabled on port {}", port);
+        println!("MCP SSE server enabled on port {}", port);
+        tokio::spawn(async move {
+            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+            if let Err(e) = start_sse_server(addr).await {
+                tracing::error!("MCP SSE server error: {}", e);
+            }
+        });
+    }
 
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
@@ -175,7 +206,20 @@ pub async fn handle_node(root_path: String, action: crate::NodeAction) -> Result
             addr,
             cert_path,
             bootstrap_node,
-        } => handle_node_start(&root_path, alias, addr, cert_path, bootstrap_node).await,
+            mcp,
+            mcp_sse_port,
+        } => {
+            handle_node_start(
+                &root_path,
+                alias,
+                addr,
+                cert_path,
+                bootstrap_node,
+                mcp,
+                mcp_sse_port,
+            )
+            .await
+        }
         crate::NodeAction::Id => handle_node_id().await,
     }
 }

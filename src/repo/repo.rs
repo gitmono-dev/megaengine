@@ -8,7 +8,9 @@ pub struct P2PDescription {
     pub creator: String,
     pub name: String,
     pub description: String,
-    pub timestamp: i64,
+    pub language: String,
+    pub latest_commit_at: i64,
+    pub size: u64,
 }
 
 /// P2P 仓库
@@ -79,7 +81,9 @@ mod tests {
             creator: "did:key:test".to_string(),
             name: "test-repo".to_string(),
             description: "A test repository".to_string(),
-            timestamp: 1000,
+            language: "Rust".to_string(),
+            latest_commit_at: 1000,
+            size: 0,
         };
 
         let repo = Repo::new(
@@ -98,7 +102,9 @@ mod tests {
             creator: "did:key:test".to_string(),
             name: "test-repo".to_string(),
             description: "A test repository".to_string(),
-            timestamp: 1000,
+            language: "Rust".to_string(),
+            latest_commit_at: 1000,
+            size: 0,
         };
 
         let mut repo = Repo::new(

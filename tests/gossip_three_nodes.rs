@@ -21,8 +21,8 @@ async fn test_gossip_three_nodes_message_relay() {
 
     // 生成或确保证书存在
     megaengine::transport::cert::ensure_certificates(
-        "cert/cert.pem",
-        "cert/key.pem",
+        "cert/cert1.pem",
+        "cert/key1.pem",
         "cert/ca-cert.pem",
     )
     .expect("ensure certificates");
@@ -59,8 +59,8 @@ async fn test_gossip_three_nodes_message_relay() {
     // 4. 启动 QUIC server
     let config1 = QuicConfig::new(
         addr1,
-        "cert/cert.pem".to_string(),
-        "cert/key.pem".to_string(),
+        "cert/cert1.pem".to_string(),
+        "cert/key1.pem".to_string(),
         "cert/ca-cert.pem".to_string(),
     );
     let config2 = QuicConfig::new(
@@ -80,7 +80,6 @@ async fn test_gossip_three_nodes_message_relay() {
     node3.start_quic_server(config3).await.unwrap();
 
     // 5. 启动 gossip 和 bundle 服务
-    let bundle_storage = std::path::PathBuf::from("./data/test_bundles");
     let gossip1 = Arc::new(GossipService::new(
         Arc::clone(node1.connection_manager.as_ref().unwrap()),
         node1.clone(),
@@ -156,4 +155,14 @@ async fn test_gossip_three_nodes_message_relay() {
     let _ = node_model::delete_node_from_db(&node_id_1).await;
     let _ = node_model::delete_node_from_db(&node_id_2).await;
     let _ = node_model::delete_node_from_db(&node_id_3).await;
+
+    // 清理生成的证书文件
+    let _ = std::fs::remove_file("cert/cert1.pem");
+    let _ = std::fs::remove_file("cert/key1.pem");
+    let _ = std::fs::remove_file("cert/cert2.pem");
+    let _ = std::fs::remove_file("cert/key2.pem");
+    let _ = std::fs::remove_file("cert/cert3.pem");
+    let _ = std::fs::remove_file("cert/key3.pem");
+    let _ = std::fs::remove_file("cert/ca-cert.pem");
+    let _ = std::fs::remove_file("cert/ca-cert-key.pem");
 }

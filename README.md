@@ -9,6 +9,7 @@ MegaEngine is a distributed peer-to-peer (P2P) network for Git repositories. It 
 - **Bundle Transfer**: P2P transfer of Git bundle files between nodes with integrity verification
 - **Automatic Bundle Sync**: Periodic background task that automatically downloads bundles for external repositories
 - **Repository Cloning**: Clone repositories from bundles using the `repo clone` command
+- **Peer-to-Peer Chat**: Send direct encrypted chat messages between nodes using the `chat send` command
 - **QUIC Transport**: Uses QUIC protocol for reliable, low-latency peer-to-peer communication
 - **Gossip Protocol**: Implements epidemic message propagation with TTL and deduplication
 - **Cryptographic Identity**: Each node has a unique EdDSA-based identity (`did:key` format)
@@ -196,6 +197,24 @@ cargo run -- --root ~/.megaengine2 repo pull --repo-id <repo_id>
 Replace `<repo_id>` with the repository ID from Step 3.
 
 The cloned repository at `./tiny` will be updated with the latest commits from the bundle.
+
+### Step 8: Node-to-Node Chat Messaging
+
+After both nodes are running and connected, you can send chat messages directly by Node ID.
+
+**Terminal 3** - Send a message from node2 to node1:
+```bash
+cargo run -- --root ~/.megaengine2 chat send --to <node1_did> --msg "hello from node2"
+```
+
+Replace `<node1_did>` with node1's DID key from Step 1/Step 2 output.
+
+Example:
+```bash
+cargo run -- --root ~/.megaengine2 chat send --to did:key:z2DUYGZos3YrXrD4pQ9aAku2g7btumKcfTiMSyBC8btqFDJ --msg "hello"
+```
+
+You should see the message reception log on node1's terminal.
 
 
 
